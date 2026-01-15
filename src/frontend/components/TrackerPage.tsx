@@ -31,6 +31,7 @@ import {
   logTrackerProgress,
   resetTracker,
   deleteTracker,
+  completeTrackerTask,
 } from '@/lib/api';
 import type { Tracker, TrackerStats, CreateTrackerPayload } from '@/lib/types';
 import TrackerCard from './TrackerCard';
@@ -178,6 +179,44 @@ export default function TrackerPage() {
   const handleCreate = () => {
     setEditTracker(null);
     onOpen();
+  };
+
+  // Handle quick complete (complete task + log progress + create next task)
+  const handleQuickComplete = async (trackerId: number, taskId: number) => {
+    try {
+      const result = await completeTrackerTask(taskId);
+
+      // Show XP animation if tracker was updated with XP
+      if (result.trackerUpdate) {
+        const tracker = trackers.find(t => t.id === trackerId);
+        if (tracker) {
+          const xpGained = result.trackerUpdate.totalXP - tracker.totalXP;
+          if (xpGained > 0) {
+            setXpAnimation({ amount: xpGained, show: true });
+            setTimeout(() => setXpAnimation({ amount: 0, show: false }), 2000);
+          }
+        }
+      }
+
+      // Show success toast
+      toast({
+        title: 'Task Complete!',
+        description: result.nextTask
+          ? `Next task created for ${new Date(result.nextTask.dueDate!).toLocaleDateString()}`
+          : 'Progress logged to tracker',
+        status: 'success',
+        duration: 2000,
+      });
+
+      await loadData();
+    } catch (error: any) {
+      toast({
+        title: 'Failed to complete task',
+        description: error.response?.data?.error || 'Unknown error',
+        status: 'error',
+        duration: 3000,
+      });
+    }
   };
 
   if (loading) {
@@ -362,6 +401,7 @@ export default function TrackerPage() {
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 onReset={handleReset}
+                onQuickComplete={handleQuickComplete}
               />
             ))}
           </SimpleGrid>

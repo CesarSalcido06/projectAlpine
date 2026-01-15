@@ -93,6 +93,14 @@ export async function updateTask(
 }
 
 /**
+ * Complete a tracked task (marks complete, logs to tracker, creates next task)
+ */
+export async function completeTrackerTask(taskId: number): Promise<Task> {
+  const response = await api.put<Task>(`/tasks/${taskId}`, { status: 'completed' });
+  return response.data;
+}
+
+/**
  * Delete a task (archives it)
  */
 export async function deleteTask(id: number): Promise<void> {

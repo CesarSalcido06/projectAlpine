@@ -60,6 +60,15 @@ const Task = sequelize.define('Task', {
       key: 'id',
     },
   },
+  trackerId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'trackers',
+      key: 'id',
+    },
+    comment: 'Reference to parent tracker for auto-generated tasks',
+  },
 }, {
   tableName: 'tasks',
   timestamps: true,

@@ -27,6 +27,16 @@ export interface Category {
   createdAt?: string;
 }
 
+// Tracker update summary (returned when completing a tracked task)
+export interface TrackerUpdateSummary {
+  id: number;
+  currentValue: number;
+  targetValue: number;
+  totalXP: number;
+  level: number;
+  currentStreak: number;
+}
+
 // Task definition
 export interface Task {
   id: number;
@@ -36,10 +46,14 @@ export interface Task {
   urgency: Urgency;
   status: TaskStatus;
   categoryId: number | null;
+  trackerId: number | null; // Reference to parent tracker for auto-generated tasks
   category?: Category;
   tags?: Tag[];
   createdAt: string;
   updatedAt: string;
+  // Auto-repeat fields (returned when completing a tracked task)
+  nextTask?: Task; // The next occurrence created by auto-repeat
+  trackerUpdate?: TrackerUpdateSummary; // Summary of tracker progress update
 }
 
 // Task creation payload
@@ -167,6 +181,8 @@ export interface Tracker {
   xpEarned?: number;
   leveledUp?: boolean;
   goalCompleted?: boolean;
+  // Associated tasks (pending tasks for this tracker)
+  tasks?: Task[];
 }
 
 // Tracker creation payload

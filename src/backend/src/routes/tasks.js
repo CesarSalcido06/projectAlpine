@@ -6,9 +6,97 @@
 
 const express = require('express');
 const { Op } = require('sequelize');
-const { Task, Category, Tag } = require('../models');
+const { Task, Category, Tag, Tracker } = require('../models');
+const { createNextTrackerTask } = require('../utils/taskGenerator');
 
 const router = express.Router();
+
+/**
+ * Helper function to log progress to a tracker.
+ * This is called when a tracked task is marked as completed.
+ * @param {number} trackerId - The tracker ID
+ * @param {number} value - The value to log (default 1)
+ * @returns {Promise<Tracker|null>} The updated tracker or null
+ */
+async function logProgressToTracker(trackerId, value = 1) {
+  try {
+    const tracker = await Tracker.findByPk(trackerId);
+    if (!tracker) {
+      console.error(`Tracker ${trackerId} not found for logging progress`);
+      return null;
+    }
+
+    // Check if we need to reset for new period
+    const now = new Date();
+    const periodStart = new Date(tracker.periodStartDate);
+    let needsReset = false;
+
+    switch (tracker.frequency) {
+      case 'hourly':
+        needsReset = now.getTime() - periodStart.getTime() > 3600000;
+        break;
+      case 'daily':
+        needsReset = now.toDateString() !== periodStart.toDateString();
+        break;
+      case 'weekly':
+        const weekMs = 7 * 24 * 60 * 60 * 1000;
+        needsReset = now.getTime() - periodStart.getTime() > weekMs;
+        break;
+      case 'monthly':
+        needsReset = now.getMonth() !== periodStart.getMonth() ||
+          now.getFullYear() !== periodStart.getFullYear();
+        break;
+    }
+
+    if (needsReset) {
+      // Check if previous period was successful
+      const wasSuccessful = tracker.currentValue >= tracker.targetValue;
+
+      await tracker.update({
+        currentValue: value,
+        periodStartDate: now,
+        totalPeriods: tracker.totalPeriods + 1,
+        successfulPeriods: tracker.successfulPeriods + (wasSuccessful ? 1 : 0),
+        // Reset streak if period was missed
+        currentStreak: wasSuccessful ? tracker.currentStreak : 0,
+      });
+    } else {
+      await tracker.update({
+        currentValue: tracker.currentValue + value,
+      });
+    }
+
+    // Check if goal completed this period
+    const goalCompleted = tracker.currentValue >= tracker.targetValue;
+
+    if (goalCompleted && !tracker.lastCompletedAt) {
+      // First completion of this period - award XP
+      const baseXP = Tracker.XP_REWARDS[tracker.frequency];
+      const multiplier = Tracker.getStreakMultiplier(tracker.currentStreak);
+      const xpEarned = Math.round(baseXP * multiplier);
+
+      const newTotalXP = tracker.totalXP + xpEarned;
+      const newLevel = Tracker.calculateLevel(newTotalXP);
+      const newStreak = tracker.currentStreak + 1;
+
+      await tracker.update({
+        totalXP: newTotalXP,
+        level: newLevel,
+        totalCompletions: tracker.totalCompletions + 1,
+        currentStreak: newStreak,
+        bestStreak: Math.max(tracker.bestStreak, newStreak),
+        lastCompletedAt: now,
+      });
+    }
+
+    await tracker.reload();
+    console.log(`Logged progress (${value}) to tracker "${tracker.name}" (${trackerId})`);
+    return tracker;
+  } catch (error) {
+    console.error(`Error logging progress to tracker ${trackerId}:`, error);
+    return null;
+  }
+}
 
 // ============================================================
 // GET /api/tasks - List all tasks with optional filters
@@ -159,6 +247,10 @@ router.put('/:id', async (req, res) => {
 
     const { title, description, dueDate, urgency, status, categoryId, tagIds } = req.body;
 
+    // Check if task is being marked as completed and has a trackerId
+    const isBeingCompleted = status === 'completed' && task.status !== 'completed';
+    const hasTracker = task.trackerId !== null;
+
     // Update task fields
     await task.update({
       title: title !== undefined ? title.trim() : task.title,
@@ -187,7 +279,45 @@ router.put('/:id', async (req, res) => {
       ],
     });
 
-    res.json(updatedTask);
+    // Handle auto-repeat for tracked tasks
+    let nextTask = null;
+    let trackerUpdate = null;
+
+    if (isBeingCompleted && hasTracker) {
+      console.log(`Task "${task.title}" completed - triggering auto-repeat for tracker ${task.trackerId}`);
+
+      // 1. Log progress to the tracker
+      trackerUpdate = await logProgressToTracker(task.trackerId);
+
+      // 2. Create the next occurrence based on the tracker's schedule
+      if (trackerUpdate && trackerUpdate.generateTasks) {
+        try {
+          nextTask = await createNextTrackerTask(trackerUpdate, task);
+          console.log(`Created next task "${nextTask.title}" with due date ${nextTask.dueDate}`);
+        } catch (taskError) {
+          console.error('Error creating next tracker task:', taskError);
+          // Don't fail the update, just log the error
+        }
+      }
+    }
+
+    // Build response with optional nextTask
+    const response = updatedTask.toJSON();
+    if (nextTask) {
+      response.nextTask = nextTask;
+    }
+    if (trackerUpdate) {
+      response.trackerUpdate = {
+        id: trackerUpdate.id,
+        currentValue: trackerUpdate.currentValue,
+        targetValue: trackerUpdate.targetValue,
+        totalXP: trackerUpdate.totalXP,
+        level: trackerUpdate.level,
+        currentStreak: trackerUpdate.currentStreak,
+      };
+    }
+
+    res.json(response);
   } catch (error) {
     console.error('Error updating task:', error);
     res.status(500).json({ error: 'Failed to update task' });

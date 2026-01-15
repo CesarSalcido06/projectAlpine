@@ -29,14 +29,27 @@ router.get('/', async (req, res) => {
     const trackers = await Tracker.findAll({
       where,
       order: [['updatedAt', 'DESC']],
+      include: [
+        {
+          model: Task,
+          as: 'tasks',
+          where: { status: { [Op.in]: ['pending', 'in_progress'] } },
+          required: false,
+        },
+      ],
     });
 
-    // Enhance with computed fields
+    // Enhance with computed fields and filter to first pending task
     const enhanced = trackers.map((tracker) => {
       const data = tracker.toJSON();
       data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
       data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
       data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+      // Sort tasks by due date and take only the first one
+      if (data.tasks && data.tasks.length > 0) {
+        data.tasks.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+        data.tasks = [data.tasks[0]];
+      }
       return data;
     });
 
@@ -133,6 +146,40 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching tracker:', error);
     res.status(500).json({ error: 'Failed to fetch tracker' });
+  }
+});
+
+// ============================================================
+// GET /api/trackers/:id/tasks - Get all tasks for a tracker
+// ============================================================
+router.get('/:id/tasks', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    const { status } = req.query;
+    const where = { trackerId: tracker.id };
+
+    if (status) {
+      where.status = status;
+    }
+
+    const tasks = await Task.findAll({
+      where,
+      order: [['dueDate', 'ASC']],
+      include: [
+        { model: Category, as: 'category' },
+        { model: Tag, as: 'tags' },
+      ],
+    });
+
+    res.json(tasks);
+  } catch (error) {
+    console.error('Error fetching tracker tasks:', error);
+    res.status(500).json({ error: 'Failed to fetch tracker tasks' });
   }
 });
 

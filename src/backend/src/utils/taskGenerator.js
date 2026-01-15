@@ -110,6 +110,7 @@ async function createTrackerTask(tracker, options = {}) {
     dueDate,
     urgency,
     categoryId: tracker.taskCategoryId || null,
+    trackerId: tracker.id,
   });
 
   // Attach the tracked tag
@@ -246,12 +247,196 @@ function getPeriodStartDate(frequency) {
   }
 }
 
+/**
+ * Parses a time string (e.g., "09:00") and returns hours and minutes.
+ * @param {string} timeStr - Time string in "HH:MM" format
+ * @returns {{hours: number, minutes: number}} Parsed hours and minutes
+ */
+function parseScheduledTime(timeStr) {
+  if (!timeStr) {
+    return { hours: 9, minutes: 0 }; // Default to 9:00 AM
+  }
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  return {
+    hours: isNaN(hours) ? 9 : hours,
+    minutes: isNaN(minutes) ? 0 : minutes,
+  };
+}
+
+/**
+ * Calculates the next due date based on the tracker's schedule.
+ * Respects scheduledTime, scheduledDays (for weekly), and scheduledDatesOfMonth (for monthly).
+ * @param {Tracker} tracker - The tracker with schedule information
+ * @param {Date} fromDate - The starting date to calculate from (defaults to now)
+ * @returns {Date} The next due date
+ */
+function calculateNextDueDate(tracker, fromDate = new Date()) {
+  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+  const nextDate = new Date(fromDate);
+
+  switch (tracker.frequency) {
+    case 'hourly':
+      // Next hour at scheduled minutes (or top of hour)
+      nextDate.setHours(nextDate.getHours() + 1);
+      nextDate.setMinutes(minutes, 0, 0);
+      break;
+
+    case 'daily':
+      // Next day at scheduled time
+      nextDate.setDate(nextDate.getDate() + 1);
+      nextDate.setHours(hours, minutes, 0, 0);
+      break;
+
+    case 'weekly':
+      // Find next scheduled day of week
+      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
+        ? tracker.scheduledDays.sort((a, b) => a - b)
+        : [nextDate.getDay()]; // Default to current day if not specified
+
+      const currentDay = nextDate.getDay();
+      let daysToAdd = 0;
+
+      // Find the next scheduled day
+      let foundNextDay = false;
+      for (const day of scheduledDays) {
+        if (day > currentDay) {
+          daysToAdd = day - currentDay;
+          foundNextDay = true;
+          break;
+        }
+      }
+
+      // If no day found this week, wrap to first scheduled day next week
+      if (!foundNextDay) {
+        daysToAdd = 7 - currentDay + scheduledDays[0];
+      }
+
+      nextDate.setDate(nextDate.getDate() + daysToAdd);
+      nextDate.setHours(hours, minutes, 0, 0);
+      break;
+
+    case 'monthly':
+      // Find next scheduled date of month
+      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
+        ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
+        : [nextDate.getDate()]; // Default to current date if not specified
+
+      const currentDate = nextDate.getDate();
+      const currentMonth = nextDate.getMonth();
+      const currentYear = nextDate.getFullYear();
+
+      let foundNextDate = false;
+
+      // Check for next scheduled date in current month
+      for (const date of scheduledDates) {
+        if (date > currentDate) {
+          // Ensure the date is valid for the current month
+          const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+          if (date <= daysInMonth) {
+            nextDate.setDate(date);
+            foundNextDate = true;
+            break;
+          }
+        }
+      }
+
+      // If no date found this month, go to first scheduled date next month
+      if (!foundNextDate) {
+        nextDate.setMonth(currentMonth + 1, 1);
+        const nextMonth = nextDate.getMonth();
+        const nextYear = nextDate.getFullYear();
+        const daysInNextMonth = new Date(nextYear, nextMonth + 1, 0).getDate();
+
+        // Find first valid scheduled date in next month
+        for (const date of scheduledDates) {
+          if (date <= daysInNextMonth) {
+            nextDate.setDate(date);
+            foundNextDate = true;
+            break;
+          }
+        }
+
+        // Fallback to 1st if no valid date found
+        if (!foundNextDate) {
+          nextDate.setDate(1);
+        }
+      }
+
+      nextDate.setHours(hours, minutes, 0, 0);
+      break;
+
+    default:
+      // Default to next day at scheduled time
+      nextDate.setDate(nextDate.getDate() + 1);
+      nextDate.setHours(hours, minutes, 0, 0);
+  }
+
+  return nextDate;
+}
+
+/**
+ * Creates the next occurrence of a tracker task after one is completed.
+ * Uses the tracker's schedule to determine the next due date.
+ * @param {Tracker} tracker - The tracker to create the next task for
+ * @param {Task} completedTask - The task that was just completed (for reference)
+ * @returns {Promise<Task>} The newly created task
+ */
+async function createNextTrackerTask(tracker, completedTask) {
+  // Calculate the next due date based on the tracker's schedule
+  const nextDueDate = calculateNextDueDate(tracker);
+
+  // Ensure the tracked tag exists
+  const trackedTag = await ensureTrackedTag();
+
+  // Determine urgency based on frequency
+  let urgency = 'medium';
+  switch (tracker.frequency) {
+    case 'hourly':
+      urgency = 'high';
+      break;
+    case 'daily':
+      urgency = 'medium';
+      break;
+    case 'weekly':
+    case 'monthly':
+      urgency = 'low';
+      break;
+  }
+
+  // Create the task
+  const task = await Task.create({
+    title: tracker.name,
+    description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
+    dueDate: nextDueDate,
+    urgency,
+    categoryId: tracker.taskCategoryId || null,
+    trackerId: tracker.id,
+  });
+
+  // Attach the tracked tag
+  await task.setTags([trackedTag]);
+
+  // Return task with associations
+  const completeTask = await Task.findByPk(task.id, {
+    include: [
+      { model: require('../models/Category'), as: 'category' },
+      { model: Tag, as: 'tags' },
+    ],
+  });
+
+  console.log(`Created next task "${task.title}" for tracker ${tracker.id} with due date ${nextDueDate.toISOString()}`);
+
+  return completeTask;
+}
+
 module.exports = {
   TRACKED_TAG_NAME,
   TRACKED_TAG_COLOR,
   ensureTrackedTag,
   calculateDueDate,
+  calculateNextDueDate,
   createTrackerTask,
+  createNextTrackerTask,
   generateRecurringTasks,
   findActiveTrackerTask,
   getPeriodStartDate,

@@ -10,6 +10,7 @@ const Task = require('./Task');
 const Category = require('./Category');
 const Tag = require('./Tag');
 const Tracker = require('./Tracker');
+const TaskTag = require('./TaskTag');
 
 // ============================================================
 // MODEL ASSOCIATIONS
@@ -28,17 +29,31 @@ Category.hasMany(Task, {
 });
 
 // Task and Tag many-to-many relationship
-// Creates a junction table 'task_tags'
+// Uses explicit junction table to prevent unique constraint issues
 Task.belongsToMany(Tag, {
-  through: 'task_tags',
+  through: TaskTag,
   as: 'tags',
   foreignKey: 'taskId',
+  otherKey: 'tagId',
 });
 
 Tag.belongsToMany(Task, {
-  through: 'task_tags',
+  through: TaskTag,
   as: 'tasks',
   foreignKey: 'tagId',
+  otherKey: 'taskId',
+});
+
+// Task belongs to Tracker (many-to-one)
+Task.belongsTo(Tracker, {
+  foreignKey: 'trackerId',
+  as: 'tracker',
+});
+
+// Tracker has many Tasks (one-to-many)
+Tracker.hasMany(Task, {
+  foreignKey: 'trackerId',
+  as: 'tasks',
 });
 
 // ============================================================
@@ -51,4 +66,5 @@ module.exports = {
   Category,
   Tag,
   Tracker,
+  TaskTag,
 };

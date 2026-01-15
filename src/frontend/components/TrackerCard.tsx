@@ -20,7 +20,7 @@ import {
   MenuItem,
   useToast,
 } from '@chakra-ui/react';
-import type { Tracker } from '@/lib/types';
+import type { Tracker, Task } from '@/lib/types';
 
 interface TrackerCardProps {
   tracker: Tracker;
@@ -28,6 +28,7 @@ interface TrackerCardProps {
   onEdit: (tracker: Tracker) => void;
   onDelete: (id: number) => void;
   onReset: (id: number) => void;
+  onQuickComplete?: (trackerId: number, taskId: number) => void;
 }
 
 export default function TrackerCard({
@@ -36,8 +37,33 @@ export default function TrackerCard({
   onEdit,
   onDelete,
   onReset,
+  onQuickComplete,
 }: TrackerCardProps) {
   const toast = useToast();
+
+  // Get the first pending task associated with this tracker
+  const pendingTask: Task | undefined = tracker.tasks && tracker.tasks.length > 0
+    ? tracker.tasks[0]
+    : undefined;
+
+  // Format the due time for display
+  const formatDueTime = (dueDate: string | null): string => {
+    if (!dueDate) return '';
+    const date = new Date(dueDate);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    const isTomorrow = date.toDateString() === new Date(now.getTime() + 86400000).toDateString();
+
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (isToday) {
+      return `Today at ${timeStr}`;
+    } else if (isTomorrow) {
+      return `Tomorrow at ${timeStr}`;
+    } else {
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ` at ${timeStr}`;
+    }
+  };
 
   const progressPercent = tracker.progressPercentage ||
     Math.min(100, Math.round((tracker.currentValue / tracker.targetValue) * 100));
@@ -175,6 +201,51 @@ export default function TrackerCard({
             )}
           </Box>
         </Box>
+
+        {/* Pending Task Section */}
+        {pendingTask && (
+          <Box
+            bg="dark.hover"
+            borderRadius="lg"
+            p={3}
+            border="1px"
+            borderColor="purple.600"
+          >
+            <HStack justify="space-between" align="start">
+              <VStack align="start" spacing={1} flex={1}>
+                <HStack spacing={2}>
+                  <Badge colorScheme="purple" fontSize="xs">TASK</Badge>
+                  <Text fontSize="sm" fontWeight="semibold" noOfLines={1}>
+                    {pendingTask.title}
+                  </Text>
+                </HStack>
+                {pendingTask.dueDate && (
+                  <Text fontSize="xs" color="gray.400">
+                    Due: {formatDueTime(pendingTask.dueDate)}
+                  </Text>
+                )}
+              </VStack>
+              {onQuickComplete && (
+                <Box
+                  as="button"
+                  px={3}
+                  py={1}
+                  borderRadius="md"
+                  bg="green.600"
+                  color="white"
+                  fontSize="sm"
+                  fontWeight="bold"
+                  transition="all 0.2s"
+                  _hover={{ bg: 'green.500', transform: 'scale(1.05)' }}
+                  _active={{ transform: 'scale(0.95)' }}
+                  onClick={() => onQuickComplete(tracker.id, pendingTask.id)}
+                >
+                  Complete
+                </Box>
+              )}
+            </HStack>
+          </Box>
+        )}
 
         {/* XP Bar (Game-style) */}
         <Box
