@@ -20,6 +20,9 @@ const router = express.Router();
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    // Lazy generation: ensure recurring tasks exist for current period
+    await generateRecurringTasks();
+
     const { active } = req.query;
 
     const where = {};

@@ -264,14 +264,16 @@ async function createTrackerTask(tracker, options = {}) {
 
 /**
  * Generates tasks for all active trackers that have generateTasks enabled.
- * Only creates tasks if there isn't already a pending/in_progress tracked task
- * for that tracker within the current period.
- * @returns {Promise<{created: Task[], skipped: number}>} Results of the generation
+ * - Archives stale pending tasks from previous periods
+ * - Creates ONE task for the current period if none exists
+ * - For weekly/monthly trackers, only creates on scheduled days
+ * @returns {Promise<{created: Task[], skipped: number, archived: number}>} Results of the generation
  */
 async function generateRecurringTasks() {
   const results = {
     created: [],
     skipped: 0,
+    archived: 0,
     errors: [],
   };
 
@@ -286,7 +288,6 @@ async function generateRecurringTasks() {
     });
 
     if (trackers.length === 0) {
-      console.log('No active trackers with task generation enabled');
       return results;
     }
 
@@ -295,16 +296,25 @@ async function generateRecurringTasks() {
 
     for (const tracker of trackers) {
       try {
-        // Check if there's already an active task for this tracker
-        const existingTask = await findActiveTrackerTask(tracker, trackedTag.id);
+        // Step 1: Archive any stale pending tasks from PREVIOUS periods
+        const archivedCount = await archiveStaleTasks(tracker);
+        results.archived += archivedCount;
 
-        if (existingTask) {
-          console.log(`Skipping tracker "${tracker.name}" - active task already exists`);
+        // Step 2: Check if today is a scheduled day (for weekly/monthly)
+        if (!isTodayScheduled(tracker)) {
           results.skipped++;
           continue;
         }
 
-        // Create a new task for this tracker
+        // Step 3: Check if there's already an active task for this tracker in current period
+        const existingTask = await findActiveTrackerTask(tracker, trackedTag.id);
+
+        if (existingTask) {
+          results.skipped++;
+          continue;
+        }
+
+        // Step 4: Create a new task for the current period
         const task = await createTrackerTask(tracker);
         results.created.push(task);
       } catch (error) {
@@ -313,7 +323,9 @@ async function generateRecurringTasks() {
       }
     }
 
-    console.log(`Task generation complete: ${results.created.length} created, ${results.skipped} skipped`);
+    if (results.created.length > 0 || results.archived > 0) {
+      console.log(`Task generation: ${results.created.length} created, ${results.archived} archived, ${results.skipped} skipped`);
+    }
     return results;
   } catch (error) {
     console.error('Error in generateRecurringTasks:', error);
@@ -322,9 +334,79 @@ async function generateRecurringTasks() {
 }
 
 /**
+ * Archives pending tasks from previous periods for a tracker.
+ * This prevents old tasks from cluttering the calendar.
+ * @param {Tracker} tracker - The tracker to clean up
+ * @returns {Promise<number>} Number of tasks archived
+ */
+async function archiveStaleTasks(tracker) {
+  const periodStart = getPeriodStartDate(tracker.frequency);
+
+  // Find pending tasks from BEFORE the current period
+  const staleTasks = await Task.findAll({
+    where: {
+      trackerId: tracker.id,
+      status: { [Op.in]: ['pending', 'in_progress'] },
+      dueDate: { [Op.lt]: periodStart },
+    },
+  });
+
+  if (staleTasks.length === 0) {
+    return 0;
+  }
+
+  // Archive them
+  for (const task of staleTasks) {
+    await task.update({ status: 'archived' });
+    console.log(`Archived stale task "${task.title}" (was due ${task.dueDate.toISOString()})`);
+  }
+
+  return staleTasks.length;
+}
+
+/**
+ * Checks if today is a scheduled day for the tracker.
+ * For daily trackers: always true
+ * For weekly trackers: checks if today's day of week is in scheduledDays
+ * For monthly trackers: checks if today's date is in scheduledDatesOfMonth
+ * @param {Tracker} tracker - The tracker to check
+ * @returns {boolean} Whether today is a scheduled day
+ */
+function isTodayScheduled(tracker) {
+  const now = new Date();
+
+  switch (tracker.frequency) {
+    case 'hourly':
+    case 'daily':
+      // Daily and hourly are always scheduled
+      return true;
+
+    case 'weekly':
+      // Check if today's day of week is in scheduledDays
+      const scheduledDays = tracker.scheduledDays;
+      if (!scheduledDays || scheduledDays.length === 0) {
+        return true; // No specific days = every day
+      }
+      return scheduledDays.includes(now.getDay());
+
+    case 'monthly':
+      // Check if today's date is in scheduledDatesOfMonth
+      const scheduledDates = tracker.scheduledDatesOfMonth;
+      if (!scheduledDates || scheduledDates.length === 0) {
+        return true; // No specific dates = every day
+      }
+      return scheduledDates.includes(now.getDate());
+
+    default:
+      return true;
+  }
+}
+
+/**
  * Finds an existing active (pending/in_progress) task for a tracker.
+ * Uses trackerId for reliable matching.
  * @param {Tracker} tracker - The tracker to find tasks for
- * @param {number} trackedTagId - The ID of the tracked tag
+ * @param {number} trackedTagId - The ID of the tracked tag (unused, kept for compatibility)
  * @returns {Promise<Task|null>} The existing task or null
  */
 async function findActiveTrackerTask(tracker, trackedTagId) {
@@ -332,26 +414,19 @@ async function findActiveTrackerTask(tracker, trackedTagId) {
   const periodStart = getPeriodStartDate(tracker.frequency);
 
   // Find tasks that:
-  // 1. Have the tracked tag
-  // 2. Match the tracker name
-  // 3. Are pending or in_progress
-  // 4. Have a due date within the current period
-  const tasks = await Task.findAll({
+  // 1. Belong to this tracker (by trackerId)
+  // 2. Are pending or in_progress
+  // 3. Have a due date within the current period
+  const task = await Task.findOne({
     where: {
-      title: tracker.name,
+      trackerId: tracker.id,
       status: { [Op.in]: ['pending', 'in_progress'] },
       dueDate: { [Op.gte]: periodStart },
     },
-    include: [
-      {
-        model: Tag,
-        as: 'tags',
-        where: { id: trackedTagId },
-      },
-    ],
+    order: [['dueDate', 'ASC']],
   });
 
-  return tasks.length > 0 ? tasks[0] : null;
+  return task;
 }
 
 /**
@@ -588,6 +663,8 @@ module.exports = {
   createTrackerTask,
   createNextTrackerTask,
   generateRecurringTasks,
+  archiveStaleTasks,
+  isTodayScheduled,
   findActiveTrackerTask,
   getPeriodStartDate,
 };

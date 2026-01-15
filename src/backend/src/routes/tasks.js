@@ -7,7 +7,7 @@
 const express = require('express');
 const { Op } = require('sequelize');
 const { Task, Category, Tag, Tracker } = require('../models');
-const { createNextTrackerTask } = require('../utils/taskGenerator');
+const { createNextTrackerTask, generateRecurringTasks } = require('../utils/taskGenerator');
 
 const router = express.Router();
 
@@ -148,6 +148,10 @@ async function revertProgressFromTracker(trackerId, value = 1) {
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    // Lazy generation: ensure recurring tasks exist for current period
+    // This runs on every task list request but is fast (checks then skips if tasks exist)
+    await generateRecurringTasks();
+
     const {
       limit = 50,
       offset = 0,
