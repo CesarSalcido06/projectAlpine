@@ -377,13 +377,29 @@ function calculateNextDueDate(tracker, fromDate = new Date()) {
 /**
  * Creates the next occurrence of a tracker task after one is completed.
  * Uses the tracker's schedule to determine the next due date.
+ * IMPORTANT: Only creates if no pending task already exists for the next period.
  * @param {Tracker} tracker - The tracker to create the next task for
  * @param {Task} completedTask - The task that was just completed (for reference)
- * @returns {Promise<Task>} The newly created task
+ * @returns {Promise<Task|null>} The newly created task, or null if one already exists
  */
 async function createNextTrackerTask(tracker, completedTask) {
   // Calculate the next due date based on the tracker's schedule
   const nextDueDate = calculateNextDueDate(tracker);
+
+  // Check if there's already a pending task for this tracker with a future due date
+  const existingTask = await Task.findOne({
+    where: {
+      trackerId: tracker.id,
+      status: { [Op.in]: ['pending', 'in_progress'] },
+      dueDate: { [Op.gte]: new Date() }, // Future or current tasks
+    },
+    order: [['dueDate', 'ASC']],
+  });
+
+  if (existingTask) {
+    console.log(`Skipping task creation - pending task already exists for tracker "${tracker.name}" (task #${existingTask.id})`);
+    return null;
+  }
 
   // Ensure the tracked tag exists
   const trackedTag = await ensureTrackedTag();

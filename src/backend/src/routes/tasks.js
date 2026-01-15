@@ -284,16 +284,32 @@ router.put('/:id', async (req, res) => {
     let trackerUpdate = null;
 
     if (isBeingCompleted && hasTracker) {
+      // First check if the tracker's period goal is already complete
+      const tracker = await Tracker.findByPk(task.trackerId);
+
+      if (tracker && tracker.currentValue >= tracker.targetValue) {
+        // Goal already met for this period - don't allow completion
+        console.log(`Task completion blocked - tracker "${tracker.name}" goal already met (${tracker.currentValue}/${tracker.targetValue})`);
+        // Revert the status change
+        await task.update({ status: 'pending' });
+        return res.status(400).json({
+          error: 'Goal already completed for this period',
+          message: `You've already completed your ${tracker.frequency} goal of ${tracker.targetValue} ${tracker.targetUnit}. Next task will be available tomorrow.`
+        });
+      }
+
       console.log(`Task "${task.title}" completed - triggering auto-repeat for tracker ${task.trackerId}`);
 
       // 1. Log progress to the tracker
       trackerUpdate = await logProgressToTracker(task.trackerId);
 
-      // 2. Create the next occurrence based on the tracker's schedule
+      // 2. Create the next occurrence based on the tracker's schedule (only if generateTasks is enabled)
       if (trackerUpdate && trackerUpdate.generateTasks) {
         try {
           nextTask = await createNextTrackerTask(trackerUpdate, task);
-          console.log(`Created next task "${nextTask.title}" with due date ${nextTask.dueDate}`);
+          if (nextTask) {
+            console.log(`Created next task "${nextTask.title}" with due date ${nextTask.dueDate}`);
+          }
         } catch (taskError) {
           console.error('Error creating next tracker task:', taskError);
           // Don't fail the update, just log the error
