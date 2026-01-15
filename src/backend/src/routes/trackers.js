@@ -414,6 +414,13 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Tracker not found' });
     }
 
+    // First, unlink all tasks associated with this tracker
+    // This prevents foreign key constraint errors
+    await Task.update(
+      { trackerId: null },
+      { where: { trackerId: tracker.id } }
+    );
+
     await tracker.destroy();
     res.json({ message: 'Tracker deleted successfully' });
   } catch (error) {
