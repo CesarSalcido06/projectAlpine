@@ -14,6 +14,10 @@ import type {
   CreateTaskPayload,
   UpdateTaskPayload,
   TaskFilters,
+  Tracker,
+  CreateTrackerPayload,
+  UpdateTrackerPayload,
+  TrackerStats,
 } from './types';
 
 // API base URL - configurable via environment variable
@@ -205,6 +209,104 @@ export async function fetchTagStats(
     console.error('Failed to fetch tag stats:', error);
     return [];
   }
+}
+
+// ============================================================
+// TRACKER ENDPOINTS (Gamified Goal Tracking)
+// ============================================================
+
+/**
+ * Fetch all trackers
+ */
+export async function fetchTrackers(active?: boolean): Promise<Tracker[]> {
+  try {
+    const params = new URLSearchParams();
+    if (active !== undefined) params.append('active', active.toString());
+    const response = await api.get<Tracker[]>(`/trackers?${params.toString()}`);
+    return response.data;
+  } catch (error) {
+    console.error('Failed to fetch trackers:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch a single tracker by ID
+ */
+export async function fetchTracker(id: number): Promise<Tracker | null> {
+  try {
+    const response = await api.get<Tracker>(`/trackers/${id}`);
+    return response.data;
+  } catch (error) {
+    console.error(`Failed to fetch tracker ${id}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fetch tracker overall statistics
+ */
+export async function fetchTrackerStats(): Promise<TrackerStats> {
+  try {
+    const response = await api.get<TrackerStats>('/trackers/stats');
+    return response.data;
+  } catch (error) {
+    console.error('Failed to fetch tracker stats:', error);
+    return {
+      totalTrackers: 0,
+      totalXP: 0,
+      totalCompletions: 0,
+      avgLevel: 1,
+      longestStreak: 0,
+      activeStreaks: 0,
+      achievements: [],
+    };
+  }
+}
+
+/**
+ * Create a new tracker
+ */
+export async function createTracker(payload: CreateTrackerPayload): Promise<Tracker> {
+  const response = await api.post<Tracker>('/trackers', payload);
+  return response.data;
+}
+
+/**
+ * Update an existing tracker
+ */
+export async function updateTracker(
+  id: number,
+  payload: UpdateTrackerPayload
+): Promise<Tracker> {
+  const response = await api.put<Tracker>(`/trackers/${id}`, payload);
+  return response.data;
+}
+
+/**
+ * Log progress for a tracker (increments current value)
+ */
+export async function logTrackerProgress(
+  id: number,
+  value: number = 1
+): Promise<Tracker> {
+  const response = await api.post<Tracker>(`/trackers/${id}/log`, { value });
+  return response.data;
+}
+
+/**
+ * Reset a tracker's current period
+ */
+export async function resetTracker(id: number): Promise<Tracker> {
+  const response = await api.post<Tracker>(`/trackers/${id}/reset`);
+  return response.data;
+}
+
+/**
+ * Delete a tracker
+ */
+export async function deleteTracker(id: number): Promise<void> {
+  await api.delete(`/trackers/${id}`);
 }
 
 export default api;

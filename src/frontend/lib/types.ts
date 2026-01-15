@@ -106,3 +106,112 @@ export interface ApiResponse<T> {
   message?: string;
   error?: string;
 }
+
+// ============================================================
+// TRACKER TYPES (Gamified Goal Tracking)
+// ============================================================
+
+// Frequency options for trackers
+export type TrackerFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
+
+// XP progress within current level
+export interface XPProgress {
+  current: number;
+  needed: number;
+  percentage: number;
+}
+
+// Achievement definition
+export interface Achievement {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  xpReward: number;
+}
+
+// Tracker definition
+export interface Tracker {
+  id: number;
+  name: string;
+  description: string | null;
+  icon: string;
+  color: string;
+  targetValue: number;
+  targetUnit: string;
+  frequency: TrackerFrequency;
+  currentValue: number;
+  periodStartDate: string;
+  totalXP: number;
+  level: number;
+  currentStreak: number;
+  bestStreak: number;
+  lastCompletedAt: string | null;
+  totalCompletions: number;
+  totalPeriods: number;
+  successfulPeriods: number;
+  isActive: boolean;
+  isPaused: boolean;
+  generateTasks: boolean;
+  taskCategoryId: number | null;
+  // Scheduling fields for automatic task generation
+  scheduledTime: string | null; // Time of day for task creation (e.g., "09:00")
+  scheduledDays: number[] | null; // Days of week for weekly frequency (0=Sun to 6=Sat)
+  scheduledDatesOfMonth: number[] | null; // Days of month for monthly frequency (1-31)
+  createdAt: string;
+  updatedAt: string;
+  // Computed fields from API
+  progressPercentage?: number;
+  xpProgress?: XPProgress;
+  streakMultiplier?: number;
+  xpEarned?: number;
+  leveledUp?: boolean;
+  goalCompleted?: boolean;
+}
+
+// Tracker creation payload
+export interface CreateTrackerPayload {
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  targetValue?: number;
+  targetUnit?: string;
+  frequency?: TrackerFrequency;
+  generateTasks?: boolean;
+  taskCategoryId?: number;
+  // Scheduling options for automatic task generation
+  scheduledTime?: string; // Time of day (e.g., "09:00") - used for DAILY frequency
+  scheduledDays?: number[]; // Days of week (0=Sun to 6=Sat) - used for WEEKLY frequency
+  scheduledDatesOfMonth?: number[]; // Days of month (1-31) - used for MONTHLY frequency
+}
+
+// Tracker update payload
+export interface UpdateTrackerPayload {
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  targetValue?: number;
+  targetUnit?: string;
+  frequency?: TrackerFrequency;
+  isActive?: boolean;
+  isPaused?: boolean;
+  generateTasks?: boolean;
+  taskCategoryId?: number;
+  // Scheduling options for automatic task generation
+  scheduledTime?: string; // Time of day (e.g., "09:00") - used for DAILY frequency
+  scheduledDays?: number[]; // Days of week (0=Sun to 6=Sat) - used for WEEKLY frequency
+  scheduledDatesOfMonth?: number[]; // Days of month (1-31) - used for MONTHLY frequency
+}
+
+// Tracker overall statistics
+export interface TrackerStats {
+  totalTrackers: number;
+  totalXP: number;
+  totalCompletions: number;
+  avgLevel: number;
+  longestStreak: number;
+  activeStreaks: number;
+  achievements: Achievement[];
+}

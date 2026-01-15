@@ -27,6 +27,7 @@ import {
   TagLabel,
   TagCloseButton,
   Box,
+  Text,
   useToast,
 } from '@chakra-ui/react';
 import { useState, useEffect } from 'react';

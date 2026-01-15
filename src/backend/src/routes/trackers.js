@@ -1,0 +1,403 @@
+/**
+ * Project Alpine - Tracker Routes
+ *
+ * REST API endpoints for gamified goal tracking.
+ */
+
+const express = require('express');
+const { Tracker, Task, Category, Tag } = require('../models');
+const { Op } = require('sequelize');
+const {
+  ensureTrackedTag,
+  createTrackerTask,
+  generateRecurringTasks,
+} = require('../utils/taskGenerator');
+
+const router = express.Router();
+
+// ============================================================
+// GET /api/trackers - List all trackers
+// ============================================================
+router.get('/', async (req, res) => {
+  try {
+    const { active } = req.query;
+
+    const where = {};
+    if (active === 'true') where.isActive = true;
+    if (active === 'false') where.isActive = false;
+
+    const trackers = await Tracker.findAll({
+      where,
+      order: [['updatedAt', 'DESC']],
+    });
+
+    // Enhance with computed fields
+    const enhanced = trackers.map((tracker) => {
+      const data = tracker.toJSON();
+      data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
+      data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
+      data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+      return data;
+    });
+
+    res.json(enhanced);
+  } catch (error) {
+    console.error('Error fetching trackers:', error);
+    res.status(500).json({ error: 'Failed to fetch trackers' });
+  }
+});
+
+// ============================================================
+// GET /api/trackers/stats - Get overall tracking stats
+// ============================================================
+router.get('/stats', async (req, res) => {
+  try {
+    const trackers = await Tracker.findAll({ where: { isActive: true } });
+
+    const totalXP = trackers.reduce((sum, t) => sum + t.totalXP, 0);
+    const totalCompletions = trackers.reduce((sum, t) => sum + t.totalCompletions, 0);
+    const avgLevel = trackers.length > 0
+      ? Math.round(trackers.reduce((sum, t) => sum + t.level, 0) / trackers.length)
+      : 1;
+    const longestStreak = Math.max(...trackers.map((t) => t.bestStreak), 0);
+    const currentStreaks = trackers.filter((t) => t.currentStreak > 0).length;
+
+    res.json({
+      totalTrackers: trackers.length,
+      totalXP,
+      totalCompletions,
+      avgLevel,
+      longestStreak,
+      activeStreaks: currentStreaks,
+      achievements: Tracker.ACHIEVEMENTS,
+    });
+  } catch (error) {
+    console.error('Error fetching tracker stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// ============================================================
+// GET /api/trackers/tracked-tag - Get or create the "tracked" tag
+// NOTE: This route must be defined before /:id to avoid route conflicts
+// ============================================================
+router.get('/tracked-tag', async (req, res) => {
+  try {
+    const tag = await ensureTrackedTag();
+    res.json(tag);
+  } catch (error) {
+    console.error('Error getting tracked tag:', error);
+    res.status(500).json({ error: 'Failed to get tracked tag' });
+  }
+});
+
+// ============================================================
+// POST /api/trackers/generate-tasks - Generate recurring tasks for all trackers
+// NOTE: This route must be defined before /:id to avoid route conflicts
+// ============================================================
+router.post('/generate-tasks', async (req, res) => {
+  try {
+    const results = await generateRecurringTasks();
+
+    res.json({
+      message: 'Task generation completed',
+      created: results.created.length,
+      skipped: results.skipped,
+      errors: results.errors.length,
+      tasks: results.created,
+      errorDetails: results.errors.length > 0 ? results.errors : undefined,
+    });
+  } catch (error) {
+    console.error('Error generating recurring tasks:', error);
+    res.status(500).json({ error: 'Failed to generate recurring tasks' });
+  }
+});
+
+// ============================================================
+// GET /api/trackers/:id - Get single tracker
+// ============================================================
+router.get('/:id', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    const data = tracker.toJSON();
+    data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
+    data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
+    data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching tracker:', error);
+    res.status(500).json({ error: 'Failed to fetch tracker' });
+  }
+});
+
+// ============================================================
+// POST /api/trackers - Create new tracker
+// ============================================================
+router.post('/', async (req, res) => {
+  try {
+    const {
+      name,
+      description,
+      icon,
+      color,
+      targetValue,
+      targetUnit,
+      frequency,
+      generateTasks,
+      taskCategoryId,
+    } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+
+    const tracker = await Tracker.create({
+      name: name.trim(),
+      description,
+      icon: icon || '🎯',
+      color: color || '#805AD5',
+      targetValue: targetValue || 1,
+      targetUnit: targetUnit || 'times',
+      frequency: frequency || 'daily',
+      generateTasks: generateTasks || false,
+      taskCategoryId,
+      periodStartDate: new Date(),
+    });
+
+    // If generateTasks is enabled, create the initial task with "tracked" tag
+    let generatedTask = null;
+    if (generateTasks) {
+      try {
+        generatedTask = await createTrackerTask(tracker);
+        console.log(`Generated initial task for tracker "${tracker.name}"`);
+      } catch (taskError) {
+        console.error('Error generating initial task:', taskError);
+        // Don't fail the tracker creation, just log the error
+      }
+    }
+
+    const response = tracker.toJSON();
+    if (generatedTask) {
+      response.generatedTask = generatedTask;
+    }
+
+    res.status(201).json(response);
+  } catch (error) {
+    console.error('Error creating tracker:', error);
+    res.status(500).json({ error: 'Failed to create tracker' });
+  }
+});
+
+// ============================================================
+// PUT /api/trackers/:id - Update tracker
+// ============================================================
+router.put('/:id', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    const allowedFields = [
+      'name', 'description', 'icon', 'color',
+      'targetValue', 'targetUnit', 'frequency',
+      'isActive', 'isPaused', 'generateTasks', 'taskCategoryId',
+    ];
+
+    const updates = {};
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    });
+
+    await tracker.update(updates);
+    res.json(tracker);
+  } catch (error) {
+    console.error('Error updating tracker:', error);
+    res.status(500).json({ error: 'Failed to update tracker' });
+  }
+});
+
+// ============================================================
+// POST /api/trackers/:id/log - Log progress
+// ============================================================
+router.post('/:id/log', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    const { value = 1 } = req.body;
+
+    // Check if we need to reset for new period
+    const now = new Date();
+    const periodStart = new Date(tracker.periodStartDate);
+    let needsReset = false;
+
+    switch (tracker.frequency) {
+      case 'hourly':
+        needsReset = now.getTime() - periodStart.getTime() > 3600000;
+        break;
+      case 'daily':
+        needsReset = now.toDateString() !== periodStart.toDateString();
+        break;
+      case 'weekly':
+        const weekMs = 7 * 24 * 60 * 60 * 1000;
+        needsReset = now.getTime() - periodStart.getTime() > weekMs;
+        break;
+      case 'monthly':
+        needsReset = now.getMonth() !== periodStart.getMonth() ||
+          now.getFullYear() !== periodStart.getFullYear();
+        break;
+    }
+
+    if (needsReset) {
+      // Check if previous period was successful
+      const wasSuccessful = tracker.currentValue >= tracker.targetValue;
+
+      await tracker.update({
+        currentValue: value,
+        periodStartDate: now,
+        totalPeriods: tracker.totalPeriods + 1,
+        successfulPeriods: tracker.successfulPeriods + (wasSuccessful ? 1 : 0),
+        // Reset streak if period was missed
+        currentStreak: wasSuccessful ? tracker.currentStreak : 0,
+      });
+    } else {
+      await tracker.update({
+        currentValue: tracker.currentValue + value,
+      });
+    }
+
+    // Check if goal completed this period
+    const goalCompleted = tracker.currentValue >= tracker.targetValue;
+    let xpEarned = 0;
+    let leveledUp = false;
+    let newLevel = tracker.level;
+
+    if (goalCompleted && !tracker.lastCompletedAt) {
+      // First completion of this period - award XP
+      const baseXP = Tracker.XP_REWARDS[tracker.frequency];
+      const multiplier = Tracker.getStreakMultiplier(tracker.currentStreak);
+      xpEarned = Math.round(baseXP * multiplier);
+
+      const newTotalXP = tracker.totalXP + xpEarned;
+      newLevel = Tracker.calculateLevel(newTotalXP);
+      leveledUp = newLevel > tracker.level;
+
+      const newStreak = tracker.currentStreak + 1;
+
+      await tracker.update({
+        totalXP: newTotalXP,
+        level: newLevel,
+        totalCompletions: tracker.totalCompletions + 1,
+        currentStreak: newStreak,
+        bestStreak: Math.max(tracker.bestStreak, newStreak),
+        lastCompletedAt: now,
+      });
+    }
+
+    // Refresh tracker data
+    await tracker.reload();
+
+    const data = tracker.toJSON();
+    data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
+    data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
+    data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+    data.xpEarned = xpEarned;
+    data.leveledUp = leveledUp;
+    data.goalCompleted = goalCompleted;
+
+    res.json(data);
+  } catch (error) {
+    console.error('Error logging progress:', error);
+    res.status(500).json({ error: 'Failed to log progress' });
+  }
+});
+
+// ============================================================
+// POST /api/trackers/:id/reset - Reset current period
+// ============================================================
+router.post('/:id/reset', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    await tracker.update({
+      currentValue: 0,
+      periodStartDate: new Date(),
+      lastCompletedAt: null,
+    });
+
+    res.json(tracker);
+  } catch (error) {
+    console.error('Error resetting tracker:', error);
+    res.status(500).json({ error: 'Failed to reset tracker' });
+  }
+});
+
+// ============================================================
+// DELETE /api/trackers/:id - Delete tracker
+// ============================================================
+router.delete('/:id', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    await tracker.destroy();
+    res.json({ message: 'Tracker deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting tracker:', error);
+    res.status(500).json({ error: 'Failed to delete tracker' });
+  }
+});
+
+// ============================================================
+// POST /api/trackers/:id/generate-task - Generate task for specific tracker
+// ============================================================
+router.post('/:id/generate-task', async (req, res) => {
+  try {
+    const tracker = await Tracker.findByPk(req.params.id);
+
+    if (!tracker) {
+      return res.status(404).json({ error: 'Tracker not found' });
+    }
+
+    if (!tracker.isActive) {
+      return res.status(400).json({ error: 'Tracker is not active' });
+    }
+
+    if (tracker.isPaused) {
+      return res.status(400).json({ error: 'Tracker is paused' });
+    }
+
+    // Force task generation even if generateTasks is false
+    const task = await createTrackerTask(tracker);
+
+    res.status(201).json({
+      message: 'Task generated successfully',
+      task,
+    });
+  } catch (error) {
+    console.error('Error generating task for tracker:', error);
+    res.status(500).json({ error: 'Failed to generate task' });
+  }
+});
+
+module.exports = router;

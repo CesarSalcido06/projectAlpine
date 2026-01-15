@@ -9,6 +9,7 @@ const { sequelize } = require('../db/database');
 const Task = require('./Task');
 const Category = require('./Category');
 const Tag = require('./Tag');
+const Tracker = require('./Tracker');
 
 // ============================================================
 // MODEL ASSOCIATIONS
@@ -49,4 +50,5 @@ module.exports = {
   Task,
   Category,
   Tag,
+  Tracker,
 };

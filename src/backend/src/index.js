@@ -19,6 +19,7 @@ const taskRoutes = require('./routes/tasks');
 const categoryRoutes = require('./routes/categories');
 const tagRoutes = require('./routes/tags');
 const statsRoutes = require('./routes/stats');
+const trackerRoutes = require('./routes/trackers');
 
 // ============================================================
 // APP CONFIGURATION
@@ -73,6 +74,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tags', tagRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/trackers', trackerRoutes);
 
 // ============================================================
 // ERROR HANDLING
