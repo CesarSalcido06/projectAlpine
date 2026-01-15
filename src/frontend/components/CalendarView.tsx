@@ -18,9 +18,11 @@ import {
   CardBody,
   IconButton,
   Flex,
+  Checkbox,
+  useToast,
 } from '@chakra-ui/react';
 import { useState, useEffect, useMemo } from 'react';
-import { fetchTasks } from '@/lib/api';
+import { fetchTasks, updateTask } from '@/lib/api';
 import type { Task } from '@/lib/types';
 
 type ViewType = 'day' | 'week' | 'month';
@@ -46,6 +48,7 @@ export default function CalendarView({
 }: CalendarViewProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const toast = useToast();
 
   // Fetch tasks for the selected date range
   useEffect(() => {
@@ -62,6 +65,29 @@ export default function CalendarView({
     };
     loadTasks();
   }, [selectedDate, view]);
+
+  // Handle task completion toggle
+  const handleToggleComplete = async (task: Task) => {
+    const newStatus = task.status === 'completed' ? 'pending' : 'completed';
+    try {
+      await updateTask(task.id, { status: newStatus });
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: newStatus } : t))
+      );
+      toast({
+        title: newStatus === 'completed' ? 'Task completed!' : 'Task reopened',
+        status: 'success',
+        duration: 2000,
+      });
+    } catch (error) {
+      console.error('Failed to update task:', error);
+      toast({
+        title: 'Failed to update task',
+        status: 'error',
+        duration: 3000,
+      });
+    }
+  };
 
   // Navigate to previous period
   const handlePrevious = () => {
@@ -186,7 +212,7 @@ export default function CalendarView({
               <Text color="gray.500">Loading...</Text>
             ) : (
               getTasksForDate(selectedDate).map((task) => (
-                <TaskCard key={task.id} task={task} />
+                <TaskCard key={task.id} task={task} onToggleComplete={handleToggleComplete} />
               ))
             )}
             {!loading && getTasksForDate(selectedDate).length === 0 && (
@@ -335,8 +361,13 @@ export default function CalendarView({
   );
 }
 
-// Simple task card component for day view
-function TaskCard({ task }: { task: Task }) {
+// Task card component for day view with completion toggle
+interface TaskCardProps {
+  task: Task;
+  onToggleComplete: (task: Task) => void;
+}
+
+function TaskCard({ task, onToggleComplete }: TaskCardProps) {
   return (
     <HStack
       p={3}
@@ -344,9 +375,23 @@ function TaskCard({ task }: { task: Task }) {
       borderRadius="md"
       borderLeft="3px solid"
       borderLeftColor={urgencyColors[task.urgency]}
+      _hover={{ bg: 'dark.hover' }}
     >
+      {/* Completion checkbox */}
+      <Checkbox
+        isChecked={task.status === 'completed'}
+        onChange={() => onToggleComplete(task)}
+        colorScheme="green"
+      />
+
       <VStack align="start" flex="1" spacing={0}>
-        <Text fontWeight="medium">{task.title}</Text>
+        <Text
+          fontWeight="medium"
+          textDecoration={task.status === 'completed' ? 'line-through' : 'none'}
+          color={task.status === 'completed' ? 'gray.500' : 'white'}
+        >
+          {task.title}
+        </Text>
         {task.description && (
           <Text fontSize="sm" color="gray.400" noOfLines={1}>
             {task.description}

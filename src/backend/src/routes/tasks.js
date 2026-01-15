@@ -98,6 +98,51 @@ async function logProgressToTracker(trackerId, value = 1) {
   }
 }
 
+/**
+ * Helper function to revert progress from a tracker.
+ * This is called when a tracked task is "uncompleted" (changed from completed to pending/in_progress).
+ * Note: XP and streaks are NOT reverted - that would be too punishing.
+ * @param {number} trackerId - The tracker ID
+ * @param {number} value - The value to decrement (default 1)
+ * @returns {Promise<Tracker|null>} The updated tracker or null
+ */
+async function revertProgressFromTracker(trackerId, value = 1) {
+  try {
+    const tracker = await Tracker.findByPk(trackerId);
+    if (!tracker) {
+      console.error(`Tracker ${trackerId} not found for reverting progress`);
+      return null;
+    }
+
+    // Calculate new currentValue, ensuring it doesn't go below 0
+    const newCurrentValue = Math.max(0, tracker.currentValue - value);
+
+    // Check if the goal was previously complete and now isn't
+    const wasGoalComplete = tracker.currentValue >= tracker.targetValue;
+    const isGoalStillComplete = newCurrentValue >= tracker.targetValue;
+
+    const updates = {
+      currentValue: newCurrentValue,
+    };
+
+    // If goal was complete but now isn't, clear lastCompletedAt
+    // Note: We do NOT revert XP or streak - those are permanent rewards
+    if (wasGoalComplete && !isGoalStillComplete) {
+      updates.lastCompletedAt = null;
+      console.log(`Tracker "${tracker.name}" goal is no longer complete (${newCurrentValue}/${tracker.targetValue})`);
+    }
+
+    await tracker.update(updates);
+    await tracker.reload();
+
+    console.log(`Reverted progress (-${value}) from tracker "${tracker.name}" (${trackerId}): ${tracker.currentValue + value} -> ${newCurrentValue}`);
+    return tracker;
+  } catch (error) {
+    console.error(`Error reverting progress from tracker ${trackerId}:`, error);
+    return null;
+  }
+}
+
 // ============================================================
 // GET /api/tasks - List all tasks with optional filters
 // ============================================================
@@ -249,6 +294,9 @@ router.put('/:id', async (req, res) => {
 
     // Check if task is being marked as completed and has a trackerId
     const isBeingCompleted = status === 'completed' && task.status !== 'completed';
+    // Check if task is being "uncompleted" (changed from completed to pending/in_progress)
+    const isBeingUncompleted = task.status === 'completed' &&
+      (status === 'pending' || status === 'in_progress');
     const hasTracker = task.trackerId !== null;
 
     // Update task fields
@@ -315,6 +363,12 @@ router.put('/:id', async (req, res) => {
           // Don't fail the update, just log the error
         }
       }
+    }
+
+    // Handle uncompleting tracked tasks
+    if (isBeingUncompleted && hasTracker) {
+      console.log(`Task "${task.title}" uncompleted - reverting progress for tracker ${task.trackerId}`);
+      trackerUpdate = await revertProgressFromTracker(task.trackerId);
     }
 
     // Build response with optional nextTask
