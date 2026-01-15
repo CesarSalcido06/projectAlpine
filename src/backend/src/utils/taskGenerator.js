@@ -71,7 +71,127 @@ function calculateDueDate(frequency, startDate = new Date()) {
 }
 
 /**
+ * Calculates the initial due date for a tracker respecting scheduling fields.
+ * If today is a scheduled day, returns today at scheduledTime.
+ * If today is not a scheduled day, returns the next scheduled occurrence.
+ * @param {Tracker} tracker - The tracker with scheduling information
+ * @returns {Date} The calculated due date
+ */
+function calculateInitialScheduledDueDate(tracker) {
+  const now = new Date();
+  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+
+  switch (tracker.frequency) {
+    case 'hourly':
+      // For hourly, just set the scheduled minutes
+      const hourlyDate = new Date(now);
+      hourlyDate.setMinutes(minutes, 0, 0);
+      // If we're past that minute, move to next hour
+      if (hourlyDate <= now) {
+        hourlyDate.setHours(hourlyDate.getHours() + 1);
+      }
+      return hourlyDate;
+
+    case 'daily':
+      // For daily, set the scheduled time
+      const dailyDate = new Date(now);
+      dailyDate.setHours(hours, minutes, 0, 0);
+      // If we're past that time today, it's still due today (can complete anytime)
+      // But if we haven't reached the time, that's the due time
+      return dailyDate;
+
+    case 'weekly':
+      // Check if today is one of the scheduled days
+      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
+        ? tracker.scheduledDays.sort((a, b) => a - b)
+        : [now.getDay()]; // Default to current day
+
+      const currentDay = now.getDay();
+      const isTodayScheduled = scheduledDays.includes(currentDay);
+
+      if (isTodayScheduled) {
+        // Today is a scheduled day - due today at scheduled time
+        const todayDate = new Date(now);
+        todayDate.setHours(hours, minutes, 0, 0);
+        return todayDate;
+      } else {
+        // Find next scheduled day
+        let daysToAdd = 0;
+        let foundNextDay = false;
+        for (const day of scheduledDays) {
+          if (day > currentDay) {
+            daysToAdd = day - currentDay;
+            foundNextDay = true;
+            break;
+          }
+        }
+        if (!foundNextDay) {
+          // Wrap to next week
+          daysToAdd = 7 - currentDay + scheduledDays[0];
+        }
+        const nextDate = new Date(now);
+        nextDate.setDate(nextDate.getDate() + daysToAdd);
+        nextDate.setHours(hours, minutes, 0, 0);
+        return nextDate;
+      }
+
+    case 'monthly':
+      // Check if today is one of the scheduled dates
+      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
+        ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
+        : [now.getDate()]; // Default to current date
+
+      const currentDate = now.getDate();
+      const isTodayScheduledDate = scheduledDates.includes(currentDate);
+
+      if (isTodayScheduledDate) {
+        // Today is a scheduled date - due today at scheduled time
+        const todayDate = new Date(now);
+        todayDate.setHours(hours, minutes, 0, 0);
+        return todayDate;
+      } else {
+        // Find next scheduled date
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        // Check for next date in current month
+        for (const date of scheduledDates) {
+          if (date > currentDate) {
+            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+            if (date <= daysInMonth) {
+              const nextDate = new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
+              return nextDate;
+            }
+          }
+        }
+
+        // Go to next month
+        const nextMonth = currentMonth + 1;
+        const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
+        const actualNextMonth = nextMonth % 12;
+        const daysInNextMonth = new Date(nextYear, actualNextMonth + 1, 0).getDate();
+
+        for (const date of scheduledDates) {
+          if (date <= daysInNextMonth) {
+            return new Date(nextYear, actualNextMonth, date, hours, minutes, 0, 0);
+          }
+        }
+
+        // Fallback to first day of next month
+        return new Date(nextYear, actualNextMonth, 1, hours, minutes, 0, 0);
+      }
+
+    default:
+      // Default to today at scheduled time
+      const defaultDate = new Date(now);
+      defaultDate.setHours(hours, minutes, 0, 0);
+      return defaultDate;
+  }
+}
+
+/**
  * Creates a task for a tracker with the "tracked" tag attached.
+ * Uses scheduling fields (scheduledTime, scheduledDays, scheduledDatesOfMonth) when set.
  * @param {Tracker} tracker - The tracker to create a task for
  * @param {Object} options - Additional options
  * @param {Date} options.dueDate - Optional custom due date
@@ -82,8 +202,21 @@ async function createTrackerTask(tracker, options = {}) {
   // Ensure the tracked tag exists
   const trackedTag = await ensureTrackedTag();
 
-  // Calculate due date based on frequency
-  const dueDate = options.dueDate || calculateDueDate(tracker.frequency);
+  // Calculate due date - use scheduling-aware calculation if scheduling fields are set
+  let dueDate = options.dueDate;
+  if (!dueDate) {
+    const hasScheduling = tracker.scheduledTime ||
+      (tracker.scheduledDays && tracker.scheduledDays.length > 0) ||
+      (tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0);
+
+    if (hasScheduling) {
+      // Use scheduling-aware due date calculation
+      dueDate = calculateInitialScheduledDueDate(tracker);
+    } else {
+      // Fallback to simple end-of-period calculation
+      dueDate = calculateDueDate(tracker.frequency);
+    }
+  }
 
   // Determine urgency based on frequency if not provided
   let urgency = options.urgency || 'medium';
@@ -450,6 +583,7 @@ module.exports = {
   TRACKED_TAG_COLOR,
   ensureTrackedTag,
   calculateDueDate,
+  calculateInitialScheduledDueDate,
   calculateNextDueDate,
   createTrackerTask,
   createNextTrackerTask,

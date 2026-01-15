@@ -198,6 +198,9 @@ router.post('/', async (req, res) => {
       frequency,
       generateTasks,
       taskCategoryId,
+      scheduledTime,
+      scheduledDays,
+      scheduledDatesOfMonth,
     } = req.body;
 
     if (!name || !name.trim()) {
@@ -215,6 +218,9 @@ router.post('/', async (req, res) => {
       generateTasks: generateTasks || false,
       taskCategoryId,
       periodStartDate: new Date(),
+      scheduledTime: scheduledTime || null,
+      scheduledDays: scheduledDays || null,
+      scheduledDatesOfMonth: scheduledDatesOfMonth || null,
     });
 
     // If generateTasks is enabled, create the initial task with "tracked" tag
@@ -256,6 +262,7 @@ router.put('/:id', async (req, res) => {
       'name', 'description', 'icon', 'color',
       'targetValue', 'targetUnit', 'frequency',
       'isActive', 'isPaused', 'generateTasks', 'taskCategoryId',
+      'scheduledTime', 'scheduledDays', 'scheduledDatesOfMonth',
     ];
 
     const updates = {};
