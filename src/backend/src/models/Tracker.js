@@ -5,7 +5,6 @@
  */
 
 const { DataTypes } = require('sequelize');
-const { sequelize } = require('../db/database');
 
 // Valid frequencies
 const FREQUENCIES = ['hourly', 'daily', 'weekly', 'monthly'];
@@ -32,179 +31,191 @@ const ACHIEVEMENTS = [
   { id: 'completions_100', name: 'Century Club', icon: '💯', description: '100 total completions', xpReward: 300 },
 ];
 
-const Tracker = sequelize.define('Tracker', {
-  id: {
-    type: DataTypes.INTEGER,
-    primaryKey: true,
-    autoIncrement: true,
-  },
+/**
+ * Define Tracker model for a given Sequelize instance
+ */
+function defineTracker(sequelize) {
+  const Tracker = sequelize.define('Tracker', {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
 
-  // Basic info
-  name: {
-    type: DataTypes.STRING,
-    allowNull: false,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: true,
-  },
-  icon: {
-    type: DataTypes.STRING,
-    defaultValue: '🎯',
-  },
-  color: {
-    type: DataTypes.STRING,
-    defaultValue: '#805AD5',
-  },
+    // Basic info
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    icon: {
+      type: DataTypes.STRING,
+      defaultValue: '🎯',
+    },
+    color: {
+      type: DataTypes.STRING,
+      defaultValue: '#805AD5',
+    },
 
-  // Goal settings
-  targetValue: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1,
-    comment: 'Target completions per period (e.g., read 30 pages)',
-  },
-  targetUnit: {
-    type: DataTypes.STRING,
-    defaultValue: 'times',
-    comment: 'Unit of measurement (times, pages, minutes, miles, etc.)',
-  },
+    // Goal settings
+    targetValue: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1,
+      comment: 'Target completions per period (e.g., read 30 pages)',
+    },
+    targetUnit: {
+      type: DataTypes.STRING,
+      defaultValue: 'times',
+      comment: 'Unit of measurement (times, pages, minutes, miles, etc.)',
+    },
 
-  // Schedule
-  frequency: {
-    type: DataTypes.ENUM(...FREQUENCIES),
-    defaultValue: 'daily',
-  },
+    // Schedule
+    frequency: {
+      type: DataTypes.ENUM(...FREQUENCIES),
+      defaultValue: 'daily',
+    },
 
-  // Current period progress
-  currentValue: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  periodStartDate: {
-    type: DataTypes.DATE,
-    defaultValue: DataTypes.NOW,
-  },
+    // Current period progress
+    currentValue: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    periodStartDate: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW,
+    },
 
-  // Gamification - XP & Levels
-  totalXP: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  level: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1,
-  },
+    // Gamification - XP & Levels
+    totalXP: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    level: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1,
+    },
 
-  // Streaks
-  currentStreak: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  bestStreak: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  lastCompletedAt: {
-    type: DataTypes.DATE,
-    allowNull: true,
-  },
+    // Streaks
+    currentStreak: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    bestStreak: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    lastCompletedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
 
-  // Lifetime stats
-  totalCompletions: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  totalPeriods: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
-  successfulPeriods: {
-    type: DataTypes.INTEGER,
-    defaultValue: 0,
-  },
+    // Lifetime stats
+    totalCompletions: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    totalPeriods: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+    successfulPeriods: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
 
-  // Status
-  isActive: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-  },
-  isPaused: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-  },
+    // Status
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
+    isPaused: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
 
-  // Link to tasks (optional - for auto-generating tasks)
-  generateTasks: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-  },
-  taskCategoryId: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-  },
+    // Link to tasks (optional - for auto-generating tasks)
+    generateTasks: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    taskCategoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
 
-  // Scheduling options for automatic task generation
-  scheduledTime: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: 'Time of day for task creation (e.g., "09:00") - used for daily/weekly/monthly',
-  },
-  scheduledDays: {
-    type: DataTypes.JSON,
-    allowNull: true,
-    comment: 'Days of week for weekly frequency (0=Sun to 6=Sat)',
-  },
-  scheduledDatesOfMonth: {
-    type: DataTypes.JSON,
-    allowNull: true,
-    comment: 'Days of month for monthly frequency (1-31)',
-  },
-}, {
-  tableName: 'trackers',
-  timestamps: true,
-});
+    // Scheduling options for automatic task generation
+    scheduledTime: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      comment: 'Time of day for task creation (e.g., "09:00") - used for daily/weekly/monthly',
+    },
+    scheduledDays: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Days of week for weekly frequency (0=Sun to 6=Sat)',
+    },
+    scheduledDatesOfMonth: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Days of month for monthly frequency (1-31)',
+    },
+  }, {
+    tableName: 'trackers',
+    timestamps: true,
+  });
 
-// Static methods
-Tracker.XP_REWARDS = XP_REWARDS;
-Tracker.ACHIEVEMENTS = ACHIEVEMENTS;
-Tracker.FREQUENCIES = FREQUENCIES;
+  // Static methods
+  Tracker.XP_REWARDS = XP_REWARDS;
+  Tracker.ACHIEVEMENTS = ACHIEVEMENTS;
+  Tracker.FREQUENCIES = FREQUENCIES;
 
-// Helper functions
-Tracker.calculateLevel = (totalXP) => {
-  // Level formula: level = floor(sqrt(totalXP / 50))
-  // Level 1: 0-99 XP, Level 2: 100-249 XP, etc.
-  let level = 1;
-  let xpNeeded = 100;
-  let totalNeeded = 0;
+  // Helper functions
+  Tracker.calculateLevel = (totalXP) => {
+    // Level formula: level = floor(sqrt(totalXP / 50))
+    // Level 1: 0-99 XP, Level 2: 100-249 XP, etc.
+    let level = 1;
+    let xpNeeded = 100;
+    let totalNeeded = 0;
 
-  while (totalXP >= totalNeeded + xpNeeded) {
-    totalNeeded += xpNeeded;
-    level++;
-    xpNeeded = level * 100;
-  }
+    while (totalXP >= totalNeeded + xpNeeded) {
+      totalNeeded += xpNeeded;
+      level++;
+      xpNeeded = level * 100;
+    }
 
-  return level;
-};
-
-Tracker.getXPProgress = (totalXP, level) => {
-  // Calculate XP progress within current level
-  let totalNeeded = 0;
-  for (let i = 1; i < level; i++) {
-    totalNeeded += i * 100;
-  }
-  const currentLevelXP = totalXP - totalNeeded;
-  const nextLevelXP = level * 100;
-
-  return {
-    current: currentLevelXP,
-    needed: nextLevelXP,
-    percentage: Math.min(100, Math.round((currentLevelXP / nextLevelXP) * 100)),
+    return level;
   };
-};
 
-Tracker.getStreakMultiplier = (streak) => {
-  // +10% per streak day, max 2x
-  return Math.min(1 + streak * XP_REWARDS.streakBonus, XP_REWARDS.maxStreakMultiplier);
-};
+  Tracker.getXPProgress = (totalXP, level) => {
+    // Calculate XP progress within current level
+    let totalNeeded = 0;
+    for (let i = 1; i < level; i++) {
+      totalNeeded += i * 100;
+    }
+    const currentLevelXP = totalXP - totalNeeded;
+    const nextLevelXP = level * 100;
 
-module.exports = Tracker;
+    return {
+      current: currentLevelXP,
+      needed: nextLevelXP,
+      percentage: Math.min(100, Math.round((currentLevelXP / nextLevelXP) * 100)),
+    };
+  };
+
+  Tracker.getStreakMultiplier = (streak) => {
+    // +10% per streak day, max 2x
+    return Math.min(1 + streak * XP_REWARDS.streakBonus, XP_REWARDS.maxStreakMultiplier);
+  };
+
+  return Tracker;
+}
+
+module.exports = {
+  defineTracker,
+  FREQUENCIES,
+  XP_REWARDS,
+  ACHIEVEMENTS,
+};

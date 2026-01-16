@@ -6,20 +6,19 @@
 
 'use client';
 
-import { Box, Container, Flex } from '@chakra-ui/react';
-import Sidebar from '@/components/Sidebar';
+import { Container } from '@chakra-ui/react';
+import AppLayout from '@/components/AppLayout';
+import { AuthGuard } from '@/components/AuthGuard';
 import TrackerPage from '@/components/TrackerPage';
 
 export default function TrackersRoute() {
   return (
-    <Flex minH="100vh">
-      <Sidebar />
-
-      <Box flex="1" p={6}>
+    <AuthGuard>
+      <AppLayout>
         <Container maxW="container.xl">
           <TrackerPage />
         </Container>
-      </Box>
-    </Flex>
+      </AppLayout>
+    </AuthGuard>
   );
 }

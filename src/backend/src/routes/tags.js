@@ -5,7 +5,6 @@
  */
 
 const express = require('express');
-const { Tag } = require('../models');
 
 const router = express.Router();
 
@@ -14,6 +13,8 @@ const router = express.Router();
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    const { Tag } = req.models;
+
     const tags = await Tag.findAll({
       order: [['name', 'ASC']],
     });
@@ -30,6 +31,8 @@ router.get('/', async (req, res) => {
 // ============================================================
 router.get('/:id', async (req, res) => {
   try {
+    const { Tag } = req.models;
+
     const tag = await Tag.findByPk(req.params.id);
 
     if (!tag) {
@@ -48,6 +51,7 @@ router.get('/:id', async (req, res) => {
 // ============================================================
 router.post('/', async (req, res) => {
   try {
+    const { Tag } = req.models;
     const { name, color } = req.body;
 
     // Validate required fields
@@ -81,6 +85,8 @@ router.post('/', async (req, res) => {
 // ============================================================
 router.put('/:id', async (req, res) => {
   try {
+    const { Tag } = req.models;
+
     const tag = await Tag.findByPk(req.params.id);
 
     if (!tag) {
@@ -106,6 +112,8 @@ router.put('/:id', async (req, res) => {
 // ============================================================
 router.delete('/:id', async (req, res) => {
   try {
+    const { Tag } = req.models;
+
     const tag = await Tag.findByPk(req.params.id);
 
     if (!tag) {

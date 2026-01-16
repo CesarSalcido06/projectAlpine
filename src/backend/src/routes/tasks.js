@@ -6,7 +6,7 @@
 
 const express = require('express');
 const { Op } = require('sequelize');
-const { Task, Category, Tag, Tracker } = require('../models');
+const { XP_REWARDS } = require('../models');
 const { createNextTrackerTask, generateRecurringTasks } = require('../utils/taskGenerator');
 
 const router = express.Router();
@@ -14,11 +14,14 @@ const router = express.Router();
 /**
  * Helper function to log progress to a tracker.
  * This is called when a tracked task is marked as completed.
+ * @param {Object} models - User-specific models
  * @param {number} trackerId - The tracker ID
  * @param {number} value - The value to log (default 1)
  * @returns {Promise<Tracker|null>} The updated tracker or null
  */
-async function logProgressToTracker(trackerId, value = 1) {
+async function logProgressToTracker(models, trackerId, value = 1) {
+  const { Tracker } = models;
+
   try {
     const tracker = await Tracker.findByPk(trackerId);
     if (!tracker) {
@@ -71,17 +74,25 @@ async function logProgressToTracker(trackerId, value = 1) {
 
     if (goalCompleted && !tracker.lastCompletedAt) {
       // First completion of this period - award XP
-      const baseXP = Tracker.XP_REWARDS[tracker.frequency];
-      const multiplier = Tracker.getStreakMultiplier(tracker.currentStreak);
+      const baseXP = XP_REWARDS[tracker.frequency];
+      const multiplier = Math.min(1 + tracker.currentStreak * XP_REWARDS.streakBonus, XP_REWARDS.maxStreakMultiplier);
       const xpEarned = Math.round(baseXP * multiplier);
 
       const newTotalXP = tracker.totalXP + xpEarned;
-      const newLevel = Tracker.calculateLevel(newTotalXP);
+      // Calculate new level
+      let level = 1;
+      let xpNeeded = 100;
+      let totalNeeded = 0;
+      while (newTotalXP >= totalNeeded + xpNeeded) {
+        totalNeeded += xpNeeded;
+        level++;
+        xpNeeded = level * 100;
+      }
       const newStreak = tracker.currentStreak + 1;
 
       await tracker.update({
         totalXP: newTotalXP,
-        level: newLevel,
+        level: level,
         totalCompletions: tracker.totalCompletions + 1,
         currentStreak: newStreak,
         bestStreak: Math.max(tracker.bestStreak, newStreak),
@@ -102,11 +113,14 @@ async function logProgressToTracker(trackerId, value = 1) {
  * Helper function to revert progress from a tracker.
  * This is called when a tracked task is "uncompleted" (changed from completed to pending/in_progress).
  * Note: XP and streaks are NOT reverted - that would be too punishing.
+ * @param {Object} models - User-specific models
  * @param {number} trackerId - The tracker ID
  * @param {number} value - The value to decrement (default 1)
  * @returns {Promise<Tracker|null>} The updated tracker or null
  */
-async function revertProgressFromTracker(trackerId, value = 1) {
+async function revertProgressFromTracker(models, trackerId, value = 1) {
+  const { Tracker } = models;
+
   try {
     const tracker = await Tracker.findByPk(trackerId);
     if (!tracker) {
@@ -148,9 +162,11 @@ async function revertProgressFromTracker(trackerId, value = 1) {
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    const { Task, Category, Tag } = req.models;
+
     // Lazy generation: ensure recurring tasks exist for current period
     // This runs on every task list request but is fast (checks then skips if tasks exist)
-    await generateRecurringTasks();
+    await generateRecurringTasks(req.models);
 
     const {
       limit = 50,
@@ -223,6 +239,8 @@ router.get('/', async (req, res) => {
 // ============================================================
 router.get('/:id', async (req, res) => {
   try {
+    const { Task, Category, Tag } = req.models;
+
     const task = await Task.findByPk(req.params.id, {
       include: [
         { model: Category, as: 'category' },
@@ -246,6 +264,7 @@ router.get('/:id', async (req, res) => {
 // ============================================================
 router.post('/', async (req, res) => {
   try {
+    const { Task, Category, Tag } = req.models;
     const { title, description, dueDate, urgency, categoryId, tagIds } = req.body;
 
     // Validate required fields
@@ -288,6 +307,8 @@ router.post('/', async (req, res) => {
 // ============================================================
 router.put('/:id', async (req, res) => {
   try {
+    const { Task, Category, Tag, Tracker } = req.models;
+
     const task = await Task.findByPk(req.params.id);
 
     if (!task) {
@@ -353,12 +374,12 @@ router.put('/:id', async (req, res) => {
       console.log(`Task "${task.title}" completed - triggering auto-repeat for tracker ${task.trackerId}`);
 
       // 1. Log progress to the tracker
-      trackerUpdate = await logProgressToTracker(task.trackerId);
+      trackerUpdate = await logProgressToTracker(req.models, task.trackerId);
 
       // 2. Create the next occurrence based on the tracker's schedule (only if generateTasks is enabled)
       if (trackerUpdate && trackerUpdate.generateTasks) {
         try {
-          nextTask = await createNextTrackerTask(trackerUpdate, task);
+          nextTask = await createNextTrackerTask(req.models, trackerUpdate, task);
           if (nextTask) {
             console.log(`Created next task "${nextTask.title}" with due date ${nextTask.dueDate}`);
           }
@@ -372,7 +393,7 @@ router.put('/:id', async (req, res) => {
     // Handle uncompleting tracked tasks
     if (isBeingUncompleted && hasTracker) {
       console.log(`Task "${task.title}" uncompleted - reverting progress for tracker ${task.trackerId}`);
-      trackerUpdate = await revertProgressFromTracker(task.trackerId);
+      trackerUpdate = await revertProgressFromTracker(req.models, task.trackerId);
     }
 
     // Build response with optional nextTask
@@ -403,6 +424,8 @@ router.put('/:id', async (req, res) => {
 // ============================================================
 router.delete('/:id', async (req, res) => {
   try {
+    const { Task } = req.models;
+
     const task = await Task.findByPk(req.params.id);
 
     if (!task) {

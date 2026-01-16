@@ -1,8 +1,8 @@
 /**
  * Project Alpine - Sidebar Navigation
  *
- * Minimal sidebar with navigation links, categories, and tags filter.
- * Supports inline add/delete for categories and tags.
+ * Minimal sidebar with navigation links, categories, tags filter,
+ * and user info with logout functionality.
  */
 
 'use client';
@@ -17,6 +17,13 @@ import {
   Input,
   IconButton,
   useToast,
+  Avatar,
+  Menu,
+  MenuButton,
+  MenuList,
+  MenuItem,
+  MenuDivider,
+  Spinner,
 } from '@chakra-ui/react';
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
@@ -30,6 +37,7 @@ import {
   deleteTag,
 } from '@/lib/api';
 import type { Category, Tag } from '@/lib/types';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Navigation items for the sidebar
 const navItems = [
@@ -40,16 +48,27 @@ const navItems = [
   { label: 'Archive', icon: '📦', href: '/archive' },
 ];
 
+// Admin navigation items
+const adminNavItems = [
+  { label: 'User Management', icon: '👥', href: '/admin/users' },
+];
+
 // Default color options for new items
 const colorOptions = [
   '#E53E3E', '#DD6B20', '#D69E2E', '#38A169',
   '#319795', '#3182CE', '#805AD5', '#D53F8C',
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  onNavigate?: () => void;
+}
+
+export default function Sidebar({ onNavigate }: SidebarProps) {
   const pathname = usePathname();
+  const { user, logout, isLoading: authLoading } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Add input states
   const [showCategoryInput, setShowCategoryInput] = useState(false);
@@ -173,16 +192,42 @@ export default function Sidebar() {
     }
   };
 
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
+
   return (
     <Box
       w="250px"
-      minH="100vh"
+      h="100vh"
       bg="dark.card"
       borderRight="1px"
       borderColor="dark.border"
       p={4}
+      overflowY="auto"
+      display="flex"
+      flexDirection="column"
+      css={{
+        '&::-webkit-scrollbar': {
+          width: '4px',
+        },
+        '&::-webkit-scrollbar-track': {
+          background: 'transparent',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: '#4A5568',
+          borderRadius: '2px',
+        },
+      }}
     >
-      <VStack align="stretch" spacing={6}>
+      <VStack align="stretch" spacing={6} flex="1">
         {/* Logo/Brand */}
         <HStack spacing={2} px={2} py={4}>
           <Text fontSize="xl">🏔️</Text>
@@ -198,7 +243,7 @@ export default function Sidebar() {
           {navItems.map((item) => {
             const isActive = pathname === item.href;
             return (
-              <Link key={item.href} href={item.href} style={{ textDecoration: 'none' }}>
+              <Link key={item.href} href={item.href} style={{ textDecoration: 'none' }} onClick={onNavigate}>
                 <HStack
                   px={3}
                   py={2}
@@ -218,6 +263,40 @@ export default function Sidebar() {
             );
           })}
         </VStack>
+
+        {/* Admin Navigation (only for admins) */}
+        {user?.isAdmin && (
+          <>
+            <Divider borderColor="dark.border" />
+            <VStack align="stretch" spacing={1}>
+              <Text fontSize="xs" color="gray.500" fontWeight="semibold" px={3}>
+                ADMIN
+              </Text>
+              {adminNavItems.map((item) => {
+                const isActive = pathname === item.href;
+                return (
+                  <Link key={item.href} href={item.href} style={{ textDecoration: 'none' }} onClick={onNavigate}>
+                    <HStack
+                      px={3}
+                      py={2}
+                      borderRadius="md"
+                      cursor="pointer"
+                      bg={isActive ? 'dark.hover' : 'transparent'}
+                      _hover={{ bg: 'dark.hover' }}
+                      borderLeft={isActive ? '3px solid' : '3px solid transparent'}
+                      borderLeftColor={isActive ? 'brand.500' : 'transparent'}
+                    >
+                      <Text>{item.icon}</Text>
+                      <Text fontSize="sm" fontWeight={isActive ? 'semibold' : 'normal'}>
+                        {item.label}
+                      </Text>
+                    </HStack>
+                  </Link>
+                );
+              })}
+            </VStack>
+          </>
+        )}
 
         <Divider borderColor="dark.border" />
 
@@ -408,6 +487,66 @@ export default function Sidebar() {
             </HStack>
           </Box>
         </VStack>
+
+        {/* Spacer */}
+        <Box flex="1" />
+
+        {/* User Info Section */}
+        <Divider borderColor="dark.border" />
+        <Box px={2} py={2}>
+          {authLoading ? (
+            <HStack justify="center" py={2}>
+              <Spinner size="sm" color="gray.500" />
+            </HStack>
+          ) : user ? (
+            <Menu>
+              <MenuButton
+                as={Box}
+                cursor="pointer"
+                borderRadius="md"
+                _hover={{ bg: 'dark.hover' }}
+                p={2}
+              >
+                <HStack spacing={3}>
+                  <Avatar
+                    size="sm"
+                    name={user.displayName || user.username}
+                    bg="purple.500"
+                  />
+                  <Box flex="1" overflow="hidden">
+                    <Text fontSize="sm" fontWeight="medium" noOfLines={1}>
+                      {user.displayName || user.username}
+                    </Text>
+                    <Text fontSize="xs" color="gray.500" noOfLines={1}>
+                      {user.isAdmin ? 'Administrator' : 'User'}
+                    </Text>
+                  </Box>
+                </HStack>
+              </MenuButton>
+              <MenuList bg="dark.card" borderColor="dark.border">
+                <MenuItem
+                  bg="dark.card"
+                  _hover={{ bg: 'dark.hover' }}
+                  fontSize="sm"
+                  isDisabled
+                >
+                  @{user.username}
+                </MenuItem>
+                <MenuDivider borderColor="dark.border" />
+                <MenuItem
+                  bg="dark.card"
+                  _hover={{ bg: 'dark.hover' }}
+                  onClick={handleLogout}
+                  fontSize="sm"
+                  color="red.400"
+                  isDisabled={isLoggingOut}
+                >
+                  {isLoggingOut ? 'Logging out...' : 'Sign Out'}
+                </MenuItem>
+              </MenuList>
+            </Menu>
+          ) : null}
+        </Box>
       </VStack>
     </Box>
   );

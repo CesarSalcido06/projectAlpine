@@ -5,7 +5,6 @@
  */
 
 const express = require('express');
-const { Category, Task } = require('../models');
 
 const router = express.Router();
 
@@ -14,6 +13,8 @@ const router = express.Router();
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    const { Category } = req.models;
+
     const categories = await Category.findAll({
       order: [
         ['isDefault', 'DESC'],
@@ -33,6 +34,8 @@ router.get('/', async (req, res) => {
 // ============================================================
 router.get('/:id', async (req, res) => {
   try {
+    const { Category } = req.models;
+
     const category = await Category.findByPk(req.params.id);
 
     if (!category) {
@@ -51,6 +54,7 @@ router.get('/:id', async (req, res) => {
 // ============================================================
 router.post('/', async (req, res) => {
   try {
+    const { Category } = req.models;
     const { name, color } = req.body;
 
     // Validate required fields
@@ -85,6 +89,8 @@ router.post('/', async (req, res) => {
 // ============================================================
 router.put('/:id', async (req, res) => {
   try {
+    const { Category } = req.models;
+
     const category = await Category.findByPk(req.params.id);
 
     if (!category) {
@@ -110,6 +116,8 @@ router.put('/:id', async (req, res) => {
 // ============================================================
 router.delete('/:id', async (req, res) => {
   try {
+    const { Category, Task } = req.models;
+
     const category = await Category.findByPk(req.params.id);
 
     if (!category) {

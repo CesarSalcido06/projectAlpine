@@ -3,10 +3,12 @@
  *
  * Utility functions for automatic task generation from trackers.
  * Handles creation of the "tracked" tag and generating tasks based on tracker schedules.
+ *
+ * All functions accept a models object for per-user database isolation.
  */
 
-const { Task, Tag, Tracker } = require('../models');
 const { Op } = require('sequelize');
+const { FREQUENCIES, XP_REWARDS, ACHIEVEMENTS } = require('../models');
 
 // Constants
 const TRACKED_TAG_NAME = 'tracked';
@@ -15,9 +17,12 @@ const TRACKED_TAG_COLOR = '#805AD5'; // Purple color
 /**
  * Ensures the "tracked" tag exists in the system.
  * Creates it if it doesn't exist, returns the existing one if it does.
+ * @param {Object} models - User-specific models
  * @returns {Promise<Tag>} The tracked tag instance
  */
-async function ensureTrackedTag() {
+async function ensureTrackedTag(models) {
+  const { Tag } = models;
+
   let tag = await Tag.findOne({
     where: { name: TRACKED_TAG_NAME },
   });
@@ -94,11 +99,8 @@ function calculateInitialScheduledDueDate(tracker) {
 
     case 'daily':
       // For daily, set the scheduled time
-      const dailyDate = new Date(now);
-      dailyDate.setHours(hours, minutes, 0, 0);
-      // If we're past that time today, it's still due today (can complete anytime)
-      // But if we haven't reached the time, that's the due time
-      return dailyDate;
+      // Use explicit date construction to avoid timezone issues
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
 
     case 'weekly':
       // Check if today is one of the scheduled days
@@ -111,9 +113,8 @@ function calculateInitialScheduledDueDate(tracker) {
 
       if (isTodayScheduled) {
         // Today is a scheduled day - due today at scheduled time
-        const todayDate = new Date(now);
-        todayDate.setHours(hours, minutes, 0, 0);
-        return todayDate;
+        // Use explicit date construction to avoid timezone issues
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
       } else {
         // Find next scheduled day
         let daysToAdd = 0;
@@ -129,10 +130,10 @@ function calculateInitialScheduledDueDate(tracker) {
           // Wrap to next week
           daysToAdd = 7 - currentDay + scheduledDays[0];
         }
-        const nextDate = new Date(now);
-        nextDate.setDate(nextDate.getDate() + daysToAdd);
-        nextDate.setHours(hours, minutes, 0, 0);
-        return nextDate;
+        const targetDate = new Date(now);
+        targetDate.setDate(now.getDate() + daysToAdd);
+        // Use explicit date construction to avoid timezone issues
+        return new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), hours, minutes, 0, 0);
       }
 
     case 'monthly':
@@ -146,9 +147,8 @@ function calculateInitialScheduledDueDate(tracker) {
 
       if (isTodayScheduledDate) {
         // Today is a scheduled date - due today at scheduled time
-        const todayDate = new Date(now);
-        todayDate.setHours(hours, minutes, 0, 0);
-        return todayDate;
+        // Use explicit date construction to avoid timezone issues
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
       } else {
         // Find next scheduled date
         const currentMonth = now.getMonth();
@@ -183,24 +183,26 @@ function calculateInitialScheduledDueDate(tracker) {
 
     default:
       // Default to today at scheduled time
-      const defaultDate = new Date(now);
-      defaultDate.setHours(hours, minutes, 0, 0);
-      return defaultDate;
+      // Use explicit date construction to avoid timezone issues
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
   }
 }
 
 /**
  * Creates a task for a tracker with the "tracked" tag attached.
  * Uses scheduling fields (scheduledTime, scheduledDays, scheduledDatesOfMonth) when set.
+ * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to create a task for
  * @param {Object} options - Additional options
  * @param {Date} options.dueDate - Optional custom due date
  * @param {string} options.urgency - Optional urgency level (defaults to 'medium')
  * @returns {Promise<Task>} The created task with tags
  */
-async function createTrackerTask(tracker, options = {}) {
+async function createTrackerTask(models, tracker, options = {}) {
+  const { Task, Tag, Category } = models;
+
   // Ensure the tracked tag exists
-  const trackedTag = await ensureTrackedTag();
+  const trackedTag = await ensureTrackedTag(models);
 
   // Calculate due date - use scheduling-aware calculation if scheduling fields are set
   let dueDate = options.dueDate;
@@ -252,7 +254,7 @@ async function createTrackerTask(tracker, options = {}) {
   // Return task with associations
   const completeTask = await Task.findByPk(task.id, {
     include: [
-      { model: require('../models/Category'), as: 'category' },
+      { model: Category, as: 'category' },
       { model: Tag, as: 'tags' },
     ],
   });
@@ -267,9 +269,12 @@ async function createTrackerTask(tracker, options = {}) {
  * - Archives stale pending tasks from previous periods
  * - Creates ONE task for the current period if none exists
  * - For weekly/monthly trackers, only creates on scheduled days
+ * @param {Object} models - User-specific models
  * @returns {Promise<{created: Task[], skipped: number, archived: number}>} Results of the generation
  */
-async function generateRecurringTasks() {
+async function generateRecurringTasks(models) {
+  const { Task, Tracker } = models;
+
   const results = {
     created: [],
     skipped: 0,
@@ -292,12 +297,12 @@ async function generateRecurringTasks() {
     }
 
     // Ensure tracked tag exists
-    const trackedTag = await ensureTrackedTag();
+    const trackedTag = await ensureTrackedTag(models);
 
     for (const tracker of trackers) {
       try {
         // Step 1: Archive any stale pending tasks from PREVIOUS periods
-        const archivedCount = await archiveStaleTasks(tracker);
+        const archivedCount = await archiveStaleTasks(models, tracker);
         results.archived += archivedCount;
 
         // Step 2: Check if today is a scheduled day (for weekly/monthly)
@@ -307,7 +312,7 @@ async function generateRecurringTasks() {
         }
 
         // Step 3: Check if there's already an active task for this tracker in current period
-        const existingTask = await findActiveTrackerTask(tracker, trackedTag.id);
+        const existingTask = await findActiveTrackerTask(models, tracker, trackedTag.id);
 
         if (existingTask) {
           results.skipped++;
@@ -315,7 +320,7 @@ async function generateRecurringTasks() {
         }
 
         // Step 4: Create a new task for the current period
-        const task = await createTrackerTask(tracker);
+        const task = await createTrackerTask(models, tracker);
         results.created.push(task);
       } catch (error) {
         console.error(`Error generating task for tracker ${tracker.id}:`, error);
@@ -336,10 +341,12 @@ async function generateRecurringTasks() {
 /**
  * Archives pending tasks from previous periods for a tracker.
  * This prevents old tasks from cluttering the calendar.
+ * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to clean up
  * @returns {Promise<number>} Number of tasks archived
  */
-async function archiveStaleTasks(tracker) {
+async function archiveStaleTasks(models, tracker) {
+  const { Task } = models;
   const periodStart = getPeriodStartDate(tracker.frequency);
 
   // Find pending tasks from BEFORE the current period
@@ -405,11 +412,14 @@ function isTodayScheduled(tracker) {
 /**
  * Finds an existing active (pending/in_progress) task for a tracker.
  * Uses trackerId for reliable matching.
+ * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to find tasks for
  * @param {number} trackedTagId - The ID of the tracked tag (unused, kept for compatibility)
  * @returns {Promise<Task|null>} The existing task or null
  */
-async function findActiveTrackerTask(tracker, trackedTagId) {
+async function findActiveTrackerTask(models, tracker, trackedTagId) {
+  const { Task } = models;
+
   // Calculate the period start date based on frequency
   const periodStart = getPeriodStartDate(tracker.frequency);
 
@@ -480,28 +490,26 @@ function parseScheduledTime(timeStr) {
  */
 function calculateNextDueDate(tracker, fromDate = new Date()) {
   const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-  const nextDate = new Date(fromDate);
+  const baseDate = new Date(fromDate);
 
   switch (tracker.frequency) {
     case 'hourly':
       // Next hour at scheduled minutes (or top of hour)
-      nextDate.setHours(nextDate.getHours() + 1);
-      nextDate.setMinutes(minutes, 0, 0);
-      break;
+      baseDate.setHours(baseDate.getHours() + 1);
+      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), baseDate.getHours(), minutes, 0, 0);
 
     case 'daily':
       // Next day at scheduled time
-      nextDate.setDate(nextDate.getDate() + 1);
-      nextDate.setHours(hours, minutes, 0, 0);
-      break;
+      baseDate.setDate(baseDate.getDate() + 1);
+      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
 
     case 'weekly':
       // Find next scheduled day of week
       const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
         ? tracker.scheduledDays.sort((a, b) => a - b)
-        : [nextDate.getDay()]; // Default to current day if not specified
+        : [baseDate.getDay()]; // Default to current day if not specified
 
-      const currentDay = nextDate.getDay();
+      const currentDay = baseDate.getDay();
       let daysToAdd = 0;
 
       // Find the next scheduled day
@@ -519,21 +527,18 @@ function calculateNextDueDate(tracker, fromDate = new Date()) {
         daysToAdd = 7 - currentDay + scheduledDays[0];
       }
 
-      nextDate.setDate(nextDate.getDate() + daysToAdd);
-      nextDate.setHours(hours, minutes, 0, 0);
-      break;
+      baseDate.setDate(baseDate.getDate() + daysToAdd);
+      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
 
     case 'monthly':
       // Find next scheduled date of month
       const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
         ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
-        : [nextDate.getDate()]; // Default to current date if not specified
+        : [baseDate.getDate()]; // Default to current date if not specified
 
-      const currentDate = nextDate.getDate();
-      const currentMonth = nextDate.getMonth();
-      const currentYear = nextDate.getFullYear();
-
-      let foundNextDate = false;
+      const currentDate = baseDate.getDate();
+      const currentMonth = baseDate.getMonth();
+      const currentYear = baseDate.getFullYear();
 
       // Check for next scheduled date in current month
       for (const date of scheduledDates) {
@@ -541,56 +546,46 @@ function calculateNextDueDate(tracker, fromDate = new Date()) {
           // Ensure the date is valid for the current month
           const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
           if (date <= daysInMonth) {
-            nextDate.setDate(date);
-            foundNextDate = true;
-            break;
+            return new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
           }
         }
       }
 
       // If no date found this month, go to first scheduled date next month
-      if (!foundNextDate) {
-        nextDate.setMonth(currentMonth + 1, 1);
-        const nextMonth = nextDate.getMonth();
-        const nextYear = nextDate.getFullYear();
-        const daysInNextMonth = new Date(nextYear, nextMonth + 1, 0).getDate();
+      const nextMonth = currentMonth + 1;
+      const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
+      const actualNextMonth = nextMonth % 12;
+      const daysInNextMonth = new Date(nextYear, actualNextMonth + 1, 0).getDate();
 
-        // Find first valid scheduled date in next month
-        for (const date of scheduledDates) {
-          if (date <= daysInNextMonth) {
-            nextDate.setDate(date);
-            foundNextDate = true;
-            break;
-          }
-        }
-
-        // Fallback to 1st if no valid date found
-        if (!foundNextDate) {
-          nextDate.setDate(1);
+      // Find first valid scheduled date in next month
+      for (const date of scheduledDates) {
+        if (date <= daysInNextMonth) {
+          return new Date(nextYear, actualNextMonth, date, hours, minutes, 0, 0);
         }
       }
 
-      nextDate.setHours(hours, minutes, 0, 0);
-      break;
+      // Fallback to 1st if no valid date found
+      return new Date(nextYear, actualNextMonth, 1, hours, minutes, 0, 0);
 
     default:
       // Default to next day at scheduled time
-      nextDate.setDate(nextDate.getDate() + 1);
-      nextDate.setHours(hours, minutes, 0, 0);
+      baseDate.setDate(baseDate.getDate() + 1);
+      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
   }
-
-  return nextDate;
 }
 
 /**
  * Creates the next occurrence of a tracker task after one is completed.
  * Uses the tracker's schedule to determine the next due date.
  * IMPORTANT: Only creates if no pending task already exists for the next period.
+ * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to create the next task for
  * @param {Task} completedTask - The task that was just completed (for reference)
  * @returns {Promise<Task|null>} The newly created task, or null if one already exists
  */
-async function createNextTrackerTask(tracker, completedTask) {
+async function createNextTrackerTask(models, tracker, completedTask) {
+  const { Task, Tag, Category } = models;
+
   // Calculate the next due date based on the tracker's schedule
   const nextDueDate = calculateNextDueDate(tracker);
 
@@ -610,7 +605,7 @@ async function createNextTrackerTask(tracker, completedTask) {
   }
 
   // Ensure the tracked tag exists
-  const trackedTag = await ensureTrackedTag();
+  const trackedTag = await ensureTrackedTag(models);
 
   // Determine urgency based on frequency
   let urgency = 'medium';
@@ -643,7 +638,7 @@ async function createNextTrackerTask(tracker, completedTask) {
   // Return task with associations
   const completeTask = await Task.findByPk(task.id, {
     include: [
-      { model: require('../models/Category'), as: 'category' },
+      { model: Category, as: 'category' },
       { model: Tag, as: 'tags' },
     ],
   });
@@ -651,6 +646,145 @@ async function createNextTrackerTask(tracker, completedTask) {
   console.log(`Created next task "${task.title}" for tracker ${tracker.id} with due date ${nextDueDate.toISOString()}`);
 
   return completeTask;
+}
+
+/**
+ * Creates tasks for ALL scheduled occurrences in the current week/month.
+ * For weekly trackers with Mon/Wed/Fri, this creates 3 tasks.
+ * For monthly trackers with specific dates, creates tasks for all those dates.
+ * @param {Object} models - User-specific models
+ * @param {Tracker} tracker - The tracker to create tasks for
+ * @returns {Promise<Task[]>} Array of created tasks
+ */
+async function createAllScheduledTasks(models, tracker) {
+  const { Task, Tag, Category } = models;
+
+  const tasks = [];
+  const trackedTag = await ensureTrackedTag(models);
+  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+  const now = new Date();
+
+  // Determine urgency based on frequency
+  let urgency = 'medium';
+  switch (tracker.frequency) {
+    case 'hourly':
+      urgency = 'high';
+      break;
+    case 'daily':
+      urgency = 'medium';
+      break;
+    case 'weekly':
+    case 'monthly':
+      urgency = 'low';
+      break;
+  }
+
+  if (tracker.frequency === 'weekly' && tracker.scheduledDays && tracker.scheduledDays.length > 0) {
+    // For weekly trackers, create tasks for all scheduled days in current and next week
+    const scheduledDays = tracker.scheduledDays.sort((a, b) => a - b);
+    const currentDay = now.getDay();
+
+    for (const day of scheduledDays) {
+      let daysToAdd = day - currentDay;
+      if (daysToAdd < 0) {
+        // Day already passed this week, schedule for next week
+        daysToAdd += 7;
+      }
+
+      // Calculate the target date first
+      const targetDate = new Date(now);
+      targetDate.setDate(now.getDate() + daysToAdd);
+
+      // Create the due date with explicit components to avoid timezone issues
+      const dueDate = new Date(
+        targetDate.getFullYear(),
+        targetDate.getMonth(),
+        targetDate.getDate(),
+        hours,
+        minutes,
+        0,
+        0
+      );
+
+      // Create the task
+      const task = await Task.create({
+        title: tracker.name,
+        description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
+        dueDate,
+        urgency,
+        categoryId: tracker.taskCategoryId || null,
+        trackerId: tracker.id,
+      });
+
+      // Attach the tracked tag
+      await task.setTags([trackedTag]);
+
+      // Fetch complete task with associations
+      const completeTask = await Task.findByPk(task.id, {
+        include: [
+          { model: Category, as: 'category' },
+          { model: Tag, as: 'tags' },
+        ],
+      });
+
+      tasks.push(completeTask);
+      console.log(`Created task "${task.title}" for ${getDayName(day)} (${dueDate.toISOString()})`);
+    }
+  } else if (tracker.frequency === 'monthly' && tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0) {
+    // For monthly trackers, create tasks for all scheduled dates in current month
+    const scheduledDates = tracker.scheduledDatesOfMonth.sort((a, b) => a - b);
+    const currentDate = now.getDate();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+    for (const date of scheduledDates) {
+      if (date > daysInMonth) continue; // Skip invalid dates for this month
+
+      const dueDate = new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
+
+      // Skip dates in the past
+      if (dueDate < now) continue;
+
+      // Create the task
+      const task = await Task.create({
+        title: tracker.name,
+        description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
+        dueDate,
+        urgency,
+        categoryId: tracker.taskCategoryId || null,
+        trackerId: tracker.id,
+      });
+
+      // Attach the tracked tag
+      await task.setTags([trackedTag]);
+
+      // Fetch complete task with associations
+      const completeTask = await Task.findByPk(task.id, {
+        include: [
+          { model: Category, as: 'category' },
+          { model: Tag, as: 'tags' },
+        ],
+      });
+
+      tasks.push(completeTask);
+      console.log(`Created task "${task.title}" for ${date}/${currentMonth + 1} (${dueDate.toISOString()})`);
+    }
+  } else {
+    // For daily/hourly or no specific schedule, create single task
+    const task = await createTrackerTask(models, tracker);
+    if (task) tasks.push(task);
+  }
+
+  return tasks;
+}
+
+/**
+ * Gets the name of a day from its number (0-6)
+ */
+function getDayName(dayNum) {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return days[dayNum] || 'Unknown';
 }
 
 module.exports = {
@@ -662,6 +796,7 @@ module.exports = {
   calculateNextDueDate,
   createTrackerTask,
   createNextTrackerTask,
+  createAllScheduledTasks,
   generateRecurringTasks,
   archiveStaleTasks,
   isTodayScheduled,

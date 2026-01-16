@@ -231,3 +231,66 @@ export interface TrackerStats {
   activeStreaks: number;
   achievements: Achievement[];
 }
+
+// ============================================================
+// USER AUTHENTICATION TYPES
+// ============================================================
+
+// User definition
+export interface User {
+  id: number;
+  username: string;
+  displayName: string | null;
+  isAdmin: boolean;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Auth state
+export interface AuthState {
+  user: User | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+}
+
+// Login payload
+export interface LoginPayload {
+  username: string;
+  password: string;
+}
+
+// Register payload
+export interface RegisterPayload {
+  username: string;
+  password: string;
+  displayName?: string;
+}
+
+// Create user payload (admin)
+export interface CreateUserPayload {
+  username: string;
+  password: string;
+  displayName?: string;
+  isAdmin?: boolean;
+}
+
+// Update user payload (admin)
+export interface UpdateUserPayload {
+  displayName?: string;
+  isAdmin?: boolean;
+  isActive?: boolean;
+  password?: string;
+}
+
+// Auth response
+export interface AuthResponse {
+  user: User;
+  message?: string;
+}
+
+// Setup status response
+export interface SetupStatus {
+  hasUsers: boolean;
+}

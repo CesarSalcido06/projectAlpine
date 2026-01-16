@@ -11,6 +11,7 @@ import type {
   Category,
   Tag,
   Stats,
+  TagStats,
   CreateTaskPayload,
   UpdateTaskPayload,
   TaskFilters,
@@ -18,6 +19,13 @@ import type {
   CreateTrackerPayload,
   UpdateTrackerPayload,
   TrackerStats,
+  User,
+  LoginPayload,
+  RegisterPayload,
+  CreateUserPayload,
+  UpdateUserPayload,
+  AuthResponse,
+  SetupStatus,
 } from './types';
 
 // API base URL - configurable via environment variable
@@ -30,6 +38,7 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: 10000, // 10 second timeout
+  withCredentials: true, // Send cookies with requests
 });
 
 // ============================================================
@@ -315,6 +324,99 @@ export async function resetTracker(id: number): Promise<Tracker> {
  */
 export async function deleteTracker(id: number): Promise<void> {
   await api.delete(`/trackers/${id}`);
+}
+
+// ============================================================
+// AUTHENTICATION ENDPOINTS
+// ============================================================
+
+/**
+ * Check if any users exist (for first-time setup)
+ */
+export async function checkSetup(): Promise<SetupStatus> {
+  try {
+    const response = await api.get<SetupStatus>('/auth/check-setup');
+    return response.data;
+  } catch (error) {
+    console.error('Failed to check setup:', error);
+    return { hasUsers: true }; // Default to true on error
+  }
+}
+
+/**
+ * Register a new user (first user becomes admin)
+ */
+export async function register(payload: RegisterPayload): Promise<AuthResponse> {
+  const response = await api.post<AuthResponse>('/auth/register', payload);
+  return response.data;
+}
+
+/**
+ * Login with username and password
+ */
+export async function login(payload: LoginPayload): Promise<AuthResponse> {
+  const response = await api.post<AuthResponse>('/auth/login', payload);
+  return response.data;
+}
+
+/**
+ * Logout (clears auth cookie)
+ */
+export async function logout(): Promise<void> {
+  await api.post('/auth/logout');
+}
+
+/**
+ * Get current authenticated user
+ */
+export async function getCurrentUser(): Promise<User | null> {
+  try {
+    const response = await api.get<{ user: User }>('/auth/me');
+    return response.data.user;
+  } catch (error) {
+    // Not authenticated
+    return null;
+  }
+}
+
+// ============================================================
+// ADMIN ENDPOINTS (User Management)
+// ============================================================
+
+/**
+ * Get all users (admin only)
+ */
+export async function fetchUsers(): Promise<User[]> {
+  try {
+    const response = await api.get<{ users: User[] }>('/admin/users');
+    return response.data.users;
+  } catch (error) {
+    console.error('Failed to fetch users:', error);
+    return [];
+  }
+}
+
+/**
+ * Create a new user (admin only)
+ */
+export async function createUser(payload: CreateUserPayload): Promise<User> {
+  const response = await api.post<{ user: User; message: string }>('/admin/users', payload);
+  return response.data.user;
+}
+
+/**
+ * Update a user (admin only)
+ */
+export async function updateUser(id: number, payload: UpdateUserPayload): Promise<User> {
+  const response = await api.put<{ user: User; message: string }>(`/admin/users/${id}`, payload);
+  return response.data.user;
+}
+
+/**
+ * Delete a user (admin only)
+ */
+export async function deleteUser(id: number): Promise<void> {
+  await api.delete(`/admin/users/${id}`);
 }
 
 export default api;

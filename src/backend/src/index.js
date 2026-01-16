@@ -2,19 +2,30 @@
  * Project Alpine - Express Server Entry Point
  *
  * Main server file that initializes the Express app,
- * connects to the database, and mounts API routes.
+ * connects to the master database, and mounts API routes.
+ * Supports multi-user authentication with per-user database isolation.
  */
 
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
 
-const { initializeDatabase, testConnection } = require('./db/database');
+// Master database for user credentials
+const { initializeMasterDatabase } = require('./db/masterDatabase');
+
+// Auth middleware
+const { requireAuth, requireAdmin } = require('./middleware/auth');
+
+// Rate limiting middleware
+const { apiLimiter, sensitiveLimiter } = require('./middleware/rateLimiter');
 
 // Import routes
+const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 const taskRoutes = require('./routes/tasks');
 const categoryRoutes = require('./routes/categories');
 const tagRoutes = require('./routes/tags');
@@ -28,7 +39,7 @@ const trackerRoutes = require('./routes/trackers');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Ensure data directory exists for SQLite database
+// Ensure data directory exists
 const dataDir = path.join(__dirname, '../data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -38,11 +49,35 @@ if (!fs.existsSync(dataDir)) {
 // MIDDLEWARE
 // ============================================================
 
-// Enable CORS for frontend
+// Enable CORS for frontend (allow local network in development)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    // Allow all localhost origins in development
+    if (origin.match(/^http:\/\/localhost:\d+$/)) {
+      return callback(null, true);
+    }
+    // Allow local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    if (origin.match(/^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+):\d+$/)) {
+      return callback(null, true);
+    }
+    // Check against FRONTEND_URL env var
+    const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+    if (origin === allowedOrigin) {
+      return callback(null, true);
+    }
+    // In development, allow all origins
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
+
+// Parse cookies
+app.use(cookieParser());
 
 // Parse JSON request bodies
 app.use(express.json());
@@ -56,7 +91,14 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // ============================================================
-// API ROUTES
+// RATE LIMITING
+// ============================================================
+
+// Apply general rate limiting to all API routes
+app.use('/api', apiLimiter);
+
+// ============================================================
+// PUBLIC API ROUTES (No auth required)
 // ============================================================
 
 // Health check endpoint
@@ -69,12 +111,23 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Mount API routes
-app.use('/api/tasks', taskRoutes);
-app.use('/api/categories', categoryRoutes);
-app.use('/api/tags', tagRoutes);
-app.use('/api/stats', statsRoutes);
-app.use('/api/trackers', trackerRoutes);
+// Auth routes (login, register, logout)
+app.use('/api/auth', authRoutes);
+
+// ============================================================
+// PROTECTED API ROUTES (Auth required)
+// ============================================================
+
+// Admin routes (require admin privileges, extra rate limiting)
+app.use('/api/admin', sensitiveLimiter, requireAuth, requireAdmin, adminRoutes);
+
+// Protected data routes (require authentication)
+// These routes will have access to req.user, req.userSequelize, and req.models
+app.use('/api/tasks', requireAuth, taskRoutes);
+app.use('/api/categories', requireAuth, categoryRoutes);
+app.use('/api/tags', requireAuth, tagRoutes);
+app.use('/api/stats', requireAuth, statsRoutes);
+app.use('/api/trackers', requireAuth, trackerRoutes);
 
 // ============================================================
 // ERROR HANDLING
@@ -100,29 +153,14 @@ app.use((err, req, res, next) => {
 
 async function startServer() {
   try {
-    // Test database connection
-    const connected = await testConnection();
-    if (!connected) {
-      throw new Error('Failed to connect to database');
+    // Initialize master database (for user credentials)
+    const masterInitialized = await initializeMasterDatabase();
+    if (!masterInitialized) {
+      throw new Error('Failed to initialize master database');
     }
 
-    // Initialize database (sync models)
-    await initializeDatabase();
-
-    // Ensure default category exists
-    const { Category } = require('./models');
-    const defaultCategory = await Category.findOne({ where: { isDefault: true } });
-    if (!defaultCategory) {
-      await Category.create({
-        name: 'General',
-        color: '#718096',
-        isDefault: true,
-      });
-      console.log('Created default category: General');
-    }
-
-    // Start listening
-    app.listen(PORT, () => {
+    // Start listening on all interfaces (0.0.0.0) to allow network access
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`
 ╔════════════════════════════════════════════════╗
 ║        PROJECT ALPINE API SERVER               ║
@@ -130,6 +168,7 @@ async function startServer() {
 ║  Status:  Running                              ║
 ║  Port:    ${PORT}                                 ║
 ║  Mode:    ${process.env.NODE_ENV || 'development'}                       ║
+║  Auth:    Multi-user enabled                   ║
 ║  Time:    ${new Date().toLocaleTimeString()}                          ║
 ╚════════════════════════════════════════════════╝
       `);

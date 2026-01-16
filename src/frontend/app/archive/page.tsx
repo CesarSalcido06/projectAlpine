@@ -9,7 +9,6 @@
 import {
   Box,
   Container,
-  Flex,
   Heading,
   Text,
   VStack,
@@ -22,7 +21,8 @@ import {
   useToast,
 } from '@chakra-ui/react';
 import { useState, useEffect } from 'react';
-import Sidebar from '@/components/Sidebar';
+import AppLayout from '@/components/AppLayout';
+import { AuthGuard } from '@/components/AuthGuard';
 import { fetchTasks, updateTask } from '@/lib/api';
 import type { Task } from '@/lib/types';
 
@@ -75,10 +75,8 @@ export default function ArchivePage() {
   };
 
   return (
-    <Flex minH="100vh">
-      <Sidebar />
-
-      <Box flex="1" p={6}>
+    <AuthGuard>
+      <AppLayout>
         <Container maxW="container.xl">
           {/* Header */}
           <VStack align="start" spacing={1} mb={6}>
@@ -157,7 +155,7 @@ export default function ArchivePage() {
             </CardBody>
           </Card>
         </Container>
-      </Box>
-    </Flex>
+      </AppLayout>
+    </AuthGuard>
   );
 }

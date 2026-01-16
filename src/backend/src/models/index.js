@@ -1,70 +1,112 @@
 /**
  * Project Alpine - Model Index
  *
- * Central export for all database models.
- * Defines relationships between models.
+ * Factory for creating user-specific database models.
+ * Each user gets their own Sequelize instance with isolated data.
  */
 
-const { sequelize } = require('../db/database');
-const Task = require('./Task');
-const Category = require('./Category');
-const Tag = require('./Tag');
-const Tracker = require('./Tracker');
-const TaskTag = require('./TaskTag');
+const { defineTask, URGENCY_LEVELS, TASK_STATUSES } = require('./Task');
+const { defineCategory } = require('./Category');
+const { defineTag } = require('./Tag');
+const { defineTracker, FREQUENCIES, XP_REWARDS, ACHIEVEMENTS } = require('./Tracker');
+const { defineTaskTag } = require('./TaskTag');
 
-// ============================================================
-// MODEL ASSOCIATIONS
-// ============================================================
+// Cache for user models (prevents re-defining models on same sequelize instance)
+const modelsCache = new WeakMap();
 
-// Task belongs to Category (many-to-one)
-Task.belongsTo(Category, {
-  foreignKey: 'categoryId',
-  as: 'category',
-});
+/**
+ * Create all models for a given Sequelize instance and set up associations.
+ * Models are cached per Sequelize instance to prevent re-definition errors.
+ *
+ * @param {Sequelize} sequelize - User's Sequelize instance
+ * @returns {Object} Object containing all models
+ */
+function getModelsForUser(sequelize) {
+  // Check cache first
+  if (modelsCache.has(sequelize)) {
+    return modelsCache.get(sequelize);
+  }
 
-// Category has many Tasks (one-to-many)
-Category.hasMany(Task, {
-  foreignKey: 'categoryId',
-  as: 'tasks',
-});
+  // Define all models
+  const Task = defineTask(sequelize);
+  const Category = defineCategory(sequelize);
+  const Tag = defineTag(sequelize);
+  const Tracker = defineTracker(sequelize);
+  const TaskTag = defineTaskTag(sequelize);
 
-// Task and Tag many-to-many relationship
-// Uses explicit junction table to prevent unique constraint issues
-Task.belongsToMany(Tag, {
-  through: TaskTag,
-  as: 'tags',
-  foreignKey: 'taskId',
-  otherKey: 'tagId',
-});
+  // ============================================================
+  // MODEL ASSOCIATIONS
+  // ============================================================
 
-Tag.belongsToMany(Task, {
-  through: TaskTag,
-  as: 'tasks',
-  foreignKey: 'tagId',
-  otherKey: 'taskId',
-});
+  // Task belongs to Category (many-to-one)
+  Task.belongsTo(Category, {
+    foreignKey: 'categoryId',
+    as: 'category',
+  });
 
-// Task belongs to Tracker (many-to-one)
-Task.belongsTo(Tracker, {
-  foreignKey: 'trackerId',
-  as: 'tracker',
-});
+  // Category has many Tasks (one-to-many)
+  Category.hasMany(Task, {
+    foreignKey: 'categoryId',
+    as: 'tasks',
+  });
 
-// Tracker has many Tasks (one-to-many)
-Tracker.hasMany(Task, {
-  foreignKey: 'trackerId',
-  as: 'tasks',
-});
+  // Task and Tag many-to-many relationship
+  // Uses explicit junction table to prevent unique constraint issues
+  Task.belongsToMany(Tag, {
+    through: TaskTag,
+    as: 'tags',
+    foreignKey: 'taskId',
+    otherKey: 'tagId',
+  });
+
+  Tag.belongsToMany(Task, {
+    through: TaskTag,
+    as: 'tasks',
+    foreignKey: 'tagId',
+    otherKey: 'taskId',
+  });
+
+  // Task belongs to Tracker (many-to-one)
+  Task.belongsTo(Tracker, {
+    foreignKey: 'trackerId',
+    as: 'tracker',
+  });
+
+  // Tracker has many Tasks (one-to-many)
+  Tracker.hasMany(Task, {
+    foreignKey: 'trackerId',
+    as: 'tasks',
+  });
+
+  // ============================================================
+  // BUILD MODELS OBJECT
+  // ============================================================
+
+  const models = {
+    sequelize,
+    Task,
+    Category,
+    Tag,
+    Tracker,
+    TaskTag,
+  };
+
+  // Cache models
+  modelsCache.set(sequelize, models);
+
+  return models;
+}
 
 // ============================================================
 // EXPORTS
 // ============================================================
 
 module.exports = {
-  sequelize,
-  Task,
-  Category,
-  Tag,
-  Tracker,
-  TaskTag,
+  getModelsForUser,
+  // Export constants for use in other modules
+  URGENCY_LEVELS,
+  TASK_STATUSES,
+  FREQUENCIES,
+  XP_REWARDS,
+  ACHIEVEMENTS,
 };

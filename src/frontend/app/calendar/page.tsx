@@ -17,7 +17,8 @@ import {
   Button,
 } from '@chakra-ui/react';
 import { useState } from 'react';
-import Sidebar from '@/components/Sidebar';
+import AppLayout from '@/components/AppLayout';
+import { AuthGuard } from '@/components/AuthGuard';
 import CalendarView from '@/components/CalendarView';
 import AddTaskModal from '@/components/AddTaskModal';
 
@@ -29,21 +30,25 @@ export default function CalendarPage() {
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
 
   return (
-    <Flex minH="100vh">
-      <Sidebar />
-
-      <Box flex="1" p={6}>
+    <AuthGuard>
+      <AppLayout>
         <Container maxW="container.xl">
           {/* Header */}
-          <Flex justify="space-between" align="center" mb={6}>
+          <Flex
+            direction={{ base: 'column', md: 'row' }}
+            justify="space-between"
+            align={{ base: 'stretch', md: 'center' }}
+            gap={4}
+            mb={6}
+          >
             <VStack align="start" spacing={1}>
-              <Heading size="lg">Calendar</Heading>
+              <Heading size={{ base: 'md', md: 'lg' }}>Calendar</Heading>
               <Text color="gray.400" fontSize="sm">
                 View your tasks on the calendar
               </Text>
             </VStack>
 
-            <HStack spacing={4}>
+            <HStack spacing={4} wrap="wrap" justify={{ base: 'center', md: 'flex-end' }}>
               {/* View toggle */}
               <HStack bg="dark.card" p={1} borderRadius="md">
                 {(['day', 'week', 'month'] as ViewType[]).map((view) => (
@@ -63,6 +68,7 @@ export default function CalendarPage() {
               <Button
                 colorScheme="brand"
                 onClick={() => setIsAddTaskOpen(true)}
+                size={{ base: 'sm', md: 'md' }}
               >
                 + Add Task
               </Button>
@@ -78,12 +84,12 @@ export default function CalendarPage() {
             />
           </Box>
         </Container>
-      </Box>
 
-      <AddTaskModal
-        isOpen={isAddTaskOpen}
-        onClose={() => setIsAddTaskOpen(false)}
-      />
-    </Flex>
+        <AddTaskModal
+          isOpen={isAddTaskOpen}
+          onClose={() => setIsAddTaskOpen(false)}
+        />
+      </AppLayout>
+    </AuthGuard>
   );
 }

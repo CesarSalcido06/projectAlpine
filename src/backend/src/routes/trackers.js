@@ -5,23 +5,62 @@
  */
 
 const express = require('express');
-const { Tracker, Task, Category, Tag } = require('../models');
 const { Op } = require('sequelize');
+const { XP_REWARDS, ACHIEVEMENTS } = require('../models');
 const {
   ensureTrackedTag,
   createTrackerTask,
+  createAllScheduledTasks,
   generateRecurringTasks,
 } = require('../utils/taskGenerator');
 
 const router = express.Router();
+
+// Helper to calculate level from XP
+function calculateLevel(totalXP) {
+  let level = 1;
+  let xpNeeded = 100;
+  let totalNeeded = 0;
+
+  while (totalXP >= totalNeeded + xpNeeded) {
+    totalNeeded += xpNeeded;
+    level++;
+    xpNeeded = level * 100;
+  }
+
+  return level;
+}
+
+// Helper to get XP progress
+function getXPProgress(totalXP, level) {
+  let totalNeeded = 0;
+  for (let i = 1; i < level; i++) {
+    totalNeeded += i * 100;
+  }
+  const currentLevelXP = totalXP - totalNeeded;
+  const nextLevelXP = level * 100;
+
+  return {
+    current: currentLevelXP,
+    needed: nextLevelXP,
+    percentage: Math.min(100, Math.round((currentLevelXP / nextLevelXP) * 100)),
+  };
+}
+
+// Helper to get streak multiplier
+function getStreakMultiplier(streak) {
+  return Math.min(1 + streak * XP_REWARDS.streakBonus, XP_REWARDS.maxStreakMultiplier);
+}
 
 // ============================================================
 // GET /api/trackers - List all trackers
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    const { Tracker, Task } = req.models;
+
     // Lazy generation: ensure recurring tasks exist for current period
-    await generateRecurringTasks();
+    await generateRecurringTasks(req.models);
 
     const { active } = req.query;
 
@@ -46,8 +85,8 @@ router.get('/', async (req, res) => {
     const enhanced = trackers.map((tracker) => {
       const data = tracker.toJSON();
       data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
-      data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
-      data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+      data.xpProgress = getXPProgress(data.totalXP, data.level);
+      data.streakMultiplier = getStreakMultiplier(data.currentStreak);
       // Sort tasks by due date and take only the first one
       if (data.tasks && data.tasks.length > 0) {
         data.tasks.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
@@ -68,6 +107,8 @@ router.get('/', async (req, res) => {
 // ============================================================
 router.get('/stats', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const trackers = await Tracker.findAll({ where: { isActive: true } });
 
     const totalXP = trackers.reduce((sum, t) => sum + t.totalXP, 0);
@@ -85,7 +126,7 @@ router.get('/stats', async (req, res) => {
       avgLevel,
       longestStreak,
       activeStreaks: currentStreaks,
-      achievements: Tracker.ACHIEVEMENTS,
+      achievements: ACHIEVEMENTS,
     });
   } catch (error) {
     console.error('Error fetching tracker stats:', error);
@@ -99,7 +140,7 @@ router.get('/stats', async (req, res) => {
 // ============================================================
 router.get('/tracked-tag', async (req, res) => {
   try {
-    const tag = await ensureTrackedTag();
+    const tag = await ensureTrackedTag(req.models);
     res.json(tag);
   } catch (error) {
     console.error('Error getting tracked tag:', error);
@@ -113,7 +154,7 @@ router.get('/tracked-tag', async (req, res) => {
 // ============================================================
 router.post('/generate-tasks', async (req, res) => {
   try {
-    const results = await generateRecurringTasks();
+    const results = await generateRecurringTasks(req.models);
 
     res.json({
       message: 'Task generation completed',
@@ -134,6 +175,8 @@ router.post('/generate-tasks', async (req, res) => {
 // ============================================================
 router.get('/:id', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -142,8 +185,8 @@ router.get('/:id', async (req, res) => {
 
     const data = tracker.toJSON();
     data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
-    data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
-    data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+    data.xpProgress = getXPProgress(data.totalXP, data.level);
+    data.streakMultiplier = getStreakMultiplier(data.currentStreak);
 
     res.json(data);
   } catch (error) {
@@ -157,6 +200,8 @@ router.get('/:id', async (req, res) => {
 // ============================================================
 router.get('/:id/tasks', async (req, res) => {
   try {
+    const { Tracker, Task, Category, Tag } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -191,6 +236,8 @@ router.get('/:id/tasks', async (req, res) => {
 // ============================================================
 router.post('/', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const {
       name,
       description,
@@ -226,21 +273,22 @@ router.post('/', async (req, res) => {
       scheduledDatesOfMonth: scheduledDatesOfMonth || null,
     });
 
-    // If generateTasks is enabled, create the initial task with "tracked" tag
-    let generatedTask = null;
+    // If generateTasks is enabled, create tasks for all scheduled occurrences
+    let generatedTasks = [];
     if (generateTasks) {
       try {
-        generatedTask = await createTrackerTask(tracker);
-        console.log(`Generated initial task for tracker "${tracker.name}"`);
+        generatedTasks = await createAllScheduledTasks(req.models, tracker);
+        console.log(`Generated ${generatedTasks.length} task(s) for tracker "${tracker.name}"`);
       } catch (taskError) {
-        console.error('Error generating initial task:', taskError);
+        console.error('Error generating initial tasks:', taskError);
         // Don't fail the tracker creation, just log the error
       }
     }
 
     const response = tracker.toJSON();
-    if (generatedTask) {
-      response.generatedTask = generatedTask;
+    if (generatedTasks.length > 0) {
+      response.generatedTasks = generatedTasks;
+      response.generatedTask = generatedTasks[0]; // Keep for backwards compatibility
     }
 
     res.status(201).json(response);
@@ -255,6 +303,8 @@ router.post('/', async (req, res) => {
 // ============================================================
 router.put('/:id', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -288,6 +338,8 @@ router.put('/:id', async (req, res) => {
 // ============================================================
 router.post('/:id/log', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -344,12 +396,12 @@ router.post('/:id/log', async (req, res) => {
 
     if (goalCompleted && !tracker.lastCompletedAt) {
       // First completion of this period - award XP
-      const baseXP = Tracker.XP_REWARDS[tracker.frequency];
-      const multiplier = Tracker.getStreakMultiplier(tracker.currentStreak);
+      const baseXP = XP_REWARDS[tracker.frequency];
+      const multiplier = getStreakMultiplier(tracker.currentStreak);
       xpEarned = Math.round(baseXP * multiplier);
 
       const newTotalXP = tracker.totalXP + xpEarned;
-      newLevel = Tracker.calculateLevel(newTotalXP);
+      newLevel = calculateLevel(newTotalXP);
       leveledUp = newLevel > tracker.level;
 
       const newStreak = tracker.currentStreak + 1;
@@ -369,8 +421,8 @@ router.post('/:id/log', async (req, res) => {
 
     const data = tracker.toJSON();
     data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
-    data.xpProgress = Tracker.getXPProgress(data.totalXP, data.level);
-    data.streakMultiplier = Tracker.getStreakMultiplier(data.currentStreak);
+    data.xpProgress = getXPProgress(data.totalXP, data.level);
+    data.streakMultiplier = getStreakMultiplier(data.currentStreak);
     data.xpEarned = xpEarned;
     data.leveledUp = leveledUp;
     data.goalCompleted = goalCompleted;
@@ -387,6 +439,8 @@ router.post('/:id/log', async (req, res) => {
 // ============================================================
 router.post('/:id/reset', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -411,6 +465,8 @@ router.post('/:id/reset', async (req, res) => {
 // ============================================================
 router.delete('/:id', async (req, res) => {
   try {
+    const { Tracker, Task } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -437,6 +493,8 @@ router.delete('/:id', async (req, res) => {
 // ============================================================
 router.post('/:id/generate-task', async (req, res) => {
   try {
+    const { Tracker } = req.models;
+
     const tracker = await Tracker.findByPk(req.params.id);
 
     if (!tracker) {
@@ -452,7 +510,7 @@ router.post('/:id/generate-task', async (req, res) => {
     }
 
     // Force task generation even if generateTasks is false
-    const task = await createTrackerTask(tracker);
+    const task = await createTrackerTask(req.models, tracker);
 
     res.status(201).json({
       message: 'Task generated successfully',

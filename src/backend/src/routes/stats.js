@@ -5,8 +5,7 @@
  */
 
 const express = require('express');
-const { Op, fn, col, literal } = require('sequelize');
-const { Task, Tag, sequelize } = require('../models');
+const { Op, fn, col } = require('sequelize');
 
 const router = express.Router();
 
@@ -15,6 +14,8 @@ const router = express.Router();
 // ============================================================
 router.get('/', async (req, res) => {
   try {
+    const { Task, sequelize } = req.models;
+
     // Get total task counts
     const totalTasks = await Task.count({
       where: { status: { [Op.ne]: 'archived' } },
@@ -91,6 +92,7 @@ router.get('/', async (req, res) => {
 // ============================================================
 router.get('/tags', async (req, res) => {
   try {
+    const { sequelize } = req.models;
     const { startDate, endDate } = req.query;
 
     let dateFilter = '';
@@ -124,6 +126,8 @@ router.get('/tags', async (req, res) => {
 // ============================================================
 router.get('/urgency', async (req, res) => {
   try {
+    const { Task } = req.models;
+
     const urgencyStats = await Task.findAll({
       attributes: [
         'urgency',
@@ -146,6 +150,7 @@ router.get('/urgency', async (req, res) => {
 // ============================================================
 router.get('/completion', async (req, res) => {
   try {
+    const { sequelize } = req.models;
     const { days = 30 } = req.query;
 
     // Get completion data for the last N days

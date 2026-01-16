@@ -20,6 +20,14 @@ import {
   Flex,
   Checkbox,
   useToast,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  PopoverHeader,
+  PopoverBody,
+  PopoverArrow,
+  PopoverCloseButton,
+  Button,
 } from '@chakra-ui/react';
 import { useState, useEffect, useMemo } from 'react';
 import { fetchTasks, updateTask } from '@/lib/api';
@@ -319,38 +327,119 @@ export default function CalendarView({
 
               return (
                 <GridItem key={index}>
-                  <Box
-                    p={1}
-                    minH="80px"
-                    bg={isToday ? 'dark.hover' : 'transparent'}
-                    borderRadius="md"
-                    border="1px solid"
-                    borderColor={isToday ? 'brand.500' : 'dark.border'}
-                    cursor="pointer"
-                    _hover={{ bg: 'dark.hover' }}
-                    onClick={() => onDateChange(day)}
-                  >
-                    <Text
-                      fontSize="xs"
-                      fontWeight={isToday ? 'bold' : 'normal'}
-                      color={isToday ? 'brand.400' : 'gray.400'}
-                    >
-                      {day.getDate()}
-                    </Text>
-                    {dayTasks.length > 0 && (
-                      <HStack mt={1} spacing={0.5}>
-                        {dayTasks.slice(0, 3).map((task) => (
-                          <Box
-                            key={task.id}
-                            w={2}
-                            h={2}
-                            borderRadius="full"
-                            bg={urgencyColors[task.urgency]}
-                          />
-                        ))}
-                      </HStack>
-                    )}
-                  </Box>
+                  <Popover placement="auto" isLazy>
+                    <PopoverTrigger>
+                      <Box
+                        p={1}
+                        minH="80px"
+                        bg={isToday ? 'dark.hover' : 'transparent'}
+                        borderRadius="md"
+                        border="1px solid"
+                        borderColor={isToday ? 'brand.500' : 'dark.border'}
+                        cursor="pointer"
+                        _hover={{ bg: 'dark.hover' }}
+                      >
+                        <Text
+                          fontSize="xs"
+                          fontWeight={isToday ? 'bold' : 'normal'}
+                          color={isToday ? 'brand.400' : 'gray.400'}
+                        >
+                          {day.getDate()}
+                        </Text>
+                        {dayTasks.length > 0 && (
+                          <HStack mt={1} spacing={0.5}>
+                            {dayTasks.slice(0, 3).map((task) => (
+                              <Box
+                                key={task.id}
+                                w={2}
+                                h={2}
+                                borderRadius="full"
+                                bg={urgencyColors[task.urgency]}
+                              />
+                            ))}
+                            {dayTasks.length > 3 && (
+                              <Text fontSize="8px" color="gray.500">
+                                +{dayTasks.length - 3}
+                              </Text>
+                            )}
+                          </HStack>
+                        )}
+                      </Box>
+                    </PopoverTrigger>
+                    <PopoverContent bg="dark.card" borderColor="dark.border" maxW="300px">
+                      <PopoverArrow bg="dark.card" />
+                      <PopoverCloseButton />
+                      <PopoverHeader borderColor="dark.border" fontWeight="semibold">
+                        {day.toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                        {dayTasks.length > 0 && (
+                          <Badge ml={2} colorScheme="purple" fontSize="xs">
+                            {dayTasks.length} task{dayTasks.length !== 1 ? 's' : ''}
+                          </Badge>
+                        )}
+                      </PopoverHeader>
+                      <PopoverBody maxH="250px" overflowY="auto">
+                        {dayTasks.length === 0 ? (
+                          <Text color="gray.500" fontSize="sm" py={2}>
+                            No tasks for this day
+                          </Text>
+                        ) : (
+                          <VStack align="stretch" spacing={2}>
+                            {dayTasks.map((task) => (
+                              <HStack
+                                key={task.id}
+                                p={2}
+                                bg="dark.hover"
+                                borderRadius="md"
+                                borderLeft="3px solid"
+                                borderLeftColor={urgencyColors[task.urgency]}
+                                spacing={2}
+                              >
+                                <Checkbox
+                                  isChecked={task.status === 'completed'}
+                                  onChange={() => handleToggleComplete(task)}
+                                  colorScheme="green"
+                                  size="sm"
+                                />
+                                <VStack align="start" spacing={0} flex="1">
+                                  <Text
+                                    fontSize="sm"
+                                    fontWeight="medium"
+                                    textDecoration={task.status === 'completed' ? 'line-through' : 'none'}
+                                    color={task.status === 'completed' ? 'gray.500' : 'white'}
+                                    noOfLines={1}
+                                  >
+                                    {task.title}
+                                  </Text>
+                                  {task.dueDate && (
+                                    <Text fontSize="xs" color="gray.500">
+                                      {new Date(task.dueDate).toLocaleTimeString('en-US', {
+                                        hour: 'numeric',
+                                        minute: '2-digit',
+                                      })}
+                                    </Text>
+                                  )}
+                                </VStack>
+                              </HStack>
+                            ))}
+                          </VStack>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          colorScheme="purple"
+                          w="100%"
+                          mt={2}
+                          onClick={() => onDateChange(day)}
+                        >
+                          View Day Details
+                        </Button>
+                      </PopoverBody>
+                    </PopoverContent>
+                  </Popover>
                 </GridItem>
               );
             })}
