@@ -1,66 +1,159 @@
 # Project Alpine
 
-A minimal, dark-themed task manager for balancing academics and athletics.
+A full-stack productivity application for managing tasks and tracking goals with gamification elements.
 
-## Vision
+**Live Demo:** [alpine.nerdyninja.net](https://alpine.nerdyninja.net)
 
-A clean, intuitive task management system built for students who need to juggle coursework, assignments, practice schedules, and competitions. Track your tasks, see your trends, stay on top of your game.
-
-## MVP Features
+## Features
 
 ### Task Management
-- **CRUD Operations** - Create, read, update, delete tasks
-- **Urgency Levels** - Low, Medium, High, Critical (color-coded)
-- **Custom Tags** - Multiple tags per task, create your own
-- **Custom Categories** - General default + user-defined
-- **Archive System** - Soft delete for completed/old tasks
+- Create, edit, and organize tasks with custom categories and tags
+- Set urgency levels (Low, Medium, High, Critical) with visual indicators
+- Due date tracking with overdue notifications
+- Archive system for completed tasks
+- Inline creation of categories and tags
+
+### Goal Tracker (Gamification)
+- Track daily/weekly/monthly habits and goals
+- XP and leveling system for motivation
+- Streak tracking with visual progress
+- Achievement badges
 
 ### Calendar Views
-- **Day View** - Focus on today's tasks
-- **Week View** - 7-day spread
-- **Month View** - Full calendar grid
+- Day, Week, and Month views
+- Visual task density indicators
+- Click-through to task details
 
-### Analytics & Trends
-- Tag usage over time
-- Completion rate tracking
-- Urgency distribution
-- Busiest periods visualization
+### Analytics Dashboard
+- Task completion trends
+- Urgency distribution charts
+- Productivity statistics
+
+### Multi-User System
+- Secure authentication with JWT
+- Per-user isolated databases (complete data separation)
+- Admin user management panel
+- First registered user becomes admin
 
 ## Tech Stack
 
-**Frontend:**
-- Next.js 14+ (App Router)
-- React 18+
-- Chakra UI (dark theme)
-- Recharts (stats visualization)
+### Frontend
+- **Next.js 14** - React framework with App Router
+- **TypeScript** - Type-safe development
+- **Chakra UI** - Component library with dark theme
+- **React Context** - State management
 
-**Backend:**
-- Node.js + Express
-- SQLite + Sequelize ORM
+### Backend
+- **Node.js + Express** - REST API server
+- **SQLite + Sequelize** - Database with ORM
+- **JWT** - Secure authentication
+- **bcrypt** - Password hashing
 
-## UI Design
+### DevOps
+- **Docker & Docker Compose** - Containerized deployment
+- **Nginx** - Reverse proxy (production)
+- **Health checks** - Container orchestration
 
-- Dark-first theme
-- Minimal layout
-- Mobile-responsive
-- High contrast for readability
+## Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Next.js App   │────▶│  Express API    │
+│   (Port 3000)   │     │   (Port 5000)   │
+└─────────────────┘     └────────┬────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    │                         │
+              ┌─────▼─────┐           ┌───────▼───────┐
+              │ master.db │           │ users/{id}/   │
+              │  (auth)   │           │  alpine.db    │
+              └───────────┘           └───────────────┘
+```
+
+Each user gets their own SQLite database for complete data isolation.
 
 ## Project Structure
 
 ```
 projectAlpine/
-├── docs/           # Specifications and design docs
-├── logs/           # Session logs
-└── src/
-    ├── frontend/   # Next.js app
-    └── backend/    # Express API
+├── src/
+│   ├── frontend/          # Next.js application
+│   │   ├── app/           # Pages (App Router)
+│   │   ├── components/    # React components
+│   │   ├── contexts/      # State management
+│   │   └── lib/           # API client & types
+│   │
+│   └── backend/           # Express API
+│       ├── src/
+│       │   ├── routes/    # API endpoints
+│       │   ├── models/    # Sequelize models
+│       │   ├── middleware/# Auth & rate limiting
+│       │   └── db/        # Database management
+│       └── Dockerfile
+│
+├── docker-compose.yml     # Container orchestration
+└── docs/                  # Design documentation
 ```
 
-## Status
+## Getting Started
 
-🚧 In Development
+### Prerequisites
+- Docker and Docker Compose
+- Node.js 18+ (for local development)
 
-## Links
+### Quick Start with Docker
 
-- [MVP Specification](docs/MVP-SPEC.md)
-- [Design Inspiration](docs/DESIGN-INSPIRATION.md)
+```bash
+# Clone the repository
+git clone https://github.com/CesarSalcido06/projectAlpine.git
+cd projectAlpine
+
+# Create environment file
+cp .env.example .env
+# Edit .env and set a secure JWT_SECRET
+
+# Start the application
+docker compose up -d
+
+# Access at http://localhost:3000
+```
+
+### Local Development
+
+```bash
+# Backend
+cd src/backend
+npm install
+npm run dev
+
+# Frontend (separate terminal)
+cd src/frontend
+npm install
+npm run dev
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/register` | Register new user |
+| POST | `/api/auth/login` | User login |
+| GET | `/api/tasks` | List tasks (filtered) |
+| POST | `/api/tasks` | Create task |
+| PUT | `/api/tasks/:id` | Update task |
+| DELETE | `/api/tasks/:id` | Delete task |
+| GET | `/api/trackers` | List goal trackers |
+| POST | `/api/trackers/:id/log` | Log progress |
+| GET | `/api/stats` | Get analytics |
+
+## Screenshots
+
+*Dashboard with task list and calendar view*
+
+*Goal tracker with XP progress and streaks*
+
+*Statistics page with completion trends*
+
+## License
+
+MIT
