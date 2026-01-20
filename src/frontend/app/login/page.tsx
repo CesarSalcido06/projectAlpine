@@ -30,12 +30,13 @@ import NextLink from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
-  const { login, isLoading, needsSetup } = useAuth();
+  const { login, loginAsGuest, isLoading, needsSetup } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGuestLoading, setIsGuestLoading] = useState(false);
 
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -51,6 +52,19 @@ export default function LoginPage() {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setError('');
+    setIsGuestLoading(true);
+
+    try {
+      await loginAsGuest();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to start demo. Please try again.');
+    } finally {
+      setIsGuestLoading(false);
     }
   };
 
@@ -134,6 +148,45 @@ export default function LoginPage() {
               >
                 Sign In
               </Button>
+
+              <Box position="relative" py={2}>
+                <Box
+                  position="absolute"
+                  top="50%"
+                  left="0"
+                  right="0"
+                  borderBottom="1px"
+                  borderColor="gray.600"
+                />
+                <Text
+                  position="relative"
+                  textAlign="center"
+                  bg={bgColor}
+                  px={2}
+                  display="inline-block"
+                  left="50%"
+                  transform="translateX(-50%)"
+                  color="gray.500"
+                  fontSize="sm"
+                >
+                  or
+                </Text>
+              </Box>
+
+              <Button
+                variant="outline"
+                colorScheme="gray"
+                size="lg"
+                onClick={handleGuestLogin}
+                isLoading={isGuestLoading}
+                loadingText="Starting demo..."
+              >
+                Try Demo Guest Mode
+              </Button>
+
+              <Text fontSize="xs" color="gray.500" textAlign="center">
+                Demo data will be created for you to explore. Session expires in 24 hours.
+              </Text>
             </Stack>
           </form>
         </Box>

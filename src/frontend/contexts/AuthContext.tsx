@@ -15,6 +15,7 @@ import {
   login as apiLogin,
   logout as apiLogout,
   register as apiRegister,
+  loginAsGuest as apiLoginAsGuest,
   checkSetup,
 } from '@/lib/api';
 
@@ -26,8 +27,10 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isGuest: boolean;
   needsSetup: boolean;
   login: (payload: LoginPayload) => Promise<void>;
+  loginAsGuest: () => Promise<void>;
   logout: () => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -54,6 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const isAuthenticated = user !== null;
+  const isGuest = user?.isGuest ?? false;
 
   /**
    * Refresh user data from server
@@ -122,6 +126,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   /**
+   * Login as guest (demo mode)
+   */
+  const loginAsGuest = useCallback(async () => {
+    const response = await apiLoginAsGuest();
+    setUser(response.user);
+    router.push('/');
+  }, [router]);
+
+  /**
    * Logout
    */
   const logout = useCallback(async () => {
@@ -144,8 +157,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     isLoading,
     isAuthenticated,
+    isGuest,
     needsSetup,
     login,
+    loginAsGuest,
     logout,
     register,
     refreshUser,

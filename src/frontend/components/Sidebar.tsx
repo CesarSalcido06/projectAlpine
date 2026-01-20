@@ -514,11 +514,18 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
                     bg="purple.500"
                   />
                   <Box flex="1" overflow="hidden">
-                    <Text fontSize="sm" fontWeight="medium" noOfLines={1}>
-                      {user.displayName || user.username}
-                    </Text>
+                    <HStack spacing={1}>
+                      <Text fontSize="sm" fontWeight="medium" noOfLines={1}>
+                        {user.displayName || user.username}
+                      </Text>
+                      {user.isGuest && (
+                        <Badge colorScheme="orange" fontSize="xs" variant="subtle">
+                          Demo
+                        </Badge>
+                      )}
+                    </HStack>
                     <Text fontSize="xs" color="gray.500" noOfLines={1}>
-                      {user.isAdmin ? 'Administrator' : 'User'}
+                      {user.isGuest ? 'Guest Mode' : user.isAdmin ? 'Administrator' : 'User'}
                     </Text>
                   </Box>
                 </HStack>
@@ -538,10 +545,10 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
                   _hover={{ bg: 'dark.hover' }}
                   onClick={handleLogout}
                   fontSize="sm"
-                  color="red.400"
+                  color={user.isGuest ? 'orange.400' : 'red.400'}
                   isDisabled={isLoggingOut}
                 >
-                  {isLoggingOut ? 'Logging out...' : 'Sign Out'}
+                  {isLoggingOut ? 'Logging out...' : user.isGuest ? 'Exit Demo' : 'Sign Out'}
                 </MenuItem>
               </MenuList>
             </Menu>

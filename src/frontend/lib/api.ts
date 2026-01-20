@@ -360,6 +360,14 @@ export async function login(payload: LoginPayload): Promise<AuthResponse> {
 }
 
 /**
+ * Login as guest (demo mode)
+ */
+export async function loginAsGuest(): Promise<AuthResponse> {
+  const response = await api.post<AuthResponse>('/auth/guest');
+  return response.data;
+}
+
+/**
  * Logout (clears auth cookie)
  */
 export async function logout(): Promise<void> {

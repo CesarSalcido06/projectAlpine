@@ -63,6 +63,14 @@ const User = masterSequelize.define('User', {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
   },
+  isGuest: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
+  guestExpiresAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   lastLoginAt: {
     type: DataTypes.DATE,
     allowNull: true,
@@ -88,6 +96,7 @@ User.prototype.validatePassword = async function(password) {
 User.prototype.toJSON = function() {
   const values = { ...this.get() };
   delete values.passwordHash; // Never expose password hash
+  delete values.guestExpiresAt; // Don't expose internal guest data
   return values;
 };
 
@@ -123,11 +132,36 @@ async function initializeMasterDatabase() {
 }
 
 /**
- * Check if any users exist (for first-time setup)
+ * Check if any real (non-guest) users exist (for first-time setup)
  */
 async function hasUsers() {
-  const count = await User.count();
+  const count = await User.count({ where: { isGuest: false } });
   return count > 0;
+}
+
+/**
+ * Clean up expired guest users and their databases
+ */
+async function cleanupExpiredGuests(deleteUserDatabaseFn) {
+  const { Op } = require('sequelize');
+  const expiredGuests = await User.findAll({
+    where: {
+      isGuest: true,
+      guestExpiresAt: { [Op.lt]: new Date() },
+    },
+  });
+
+  for (const guest of expiredGuests) {
+    try {
+      await deleteUserDatabaseFn(guest.id);
+      await guest.destroy();
+      console.log(`Cleaned up expired guest user: ${guest.username}`);
+    } catch (error) {
+      console.error(`Failed to cleanup guest ${guest.id}:`, error);
+    }
+  }
+
+  return expiredGuests.length;
 }
 
 /**
@@ -143,4 +177,5 @@ module.exports = {
   initializeMasterDatabase,
   hasUsers,
   getAdminCount,
+  cleanupExpiredGuests,
 };

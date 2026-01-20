@@ -246,6 +246,7 @@ export interface User {
   displayName: string | null;
   isAdmin: boolean;
   isActive: boolean;
+  isGuest: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
