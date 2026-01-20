@@ -1,0 +1,64 @@
+services:
+  # Project Alpine Backend API
+  alpine-backend:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+    container_name: alpine-backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - FRONTEND_URL=${FRONTEND_URL:-https://your-domain.com}
+      - JWT_SECRET=${JWT_SECRET:-change-this-secure-secret-in-production}
+    volumes:
+      # Persist database and user data
+      - alpine-data:/app/data
+    ports:
+      - "3001:3001"
+    networks:
+      - alpine-network
+      - proxy-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/auth/check-setup', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Project Alpine Frontend
+  alpine-frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+    container_name: alpine-frontend
+    restart: unless-stopped
+    environment:
+      # API is proxied through reverse proxy
+      - NEXT_PUBLIC_API_URL=/api
+      - BACKEND_URL=http://alpine-backend:3001
+    ports:
+      - "3002:3000"
+    depends_on:
+      alpine-backend:
+        condition: service_healthy
+    networks:
+      - alpine-network
+      - proxy-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  alpine-data:
+
+networks:
+  alpine-network:
+    driver: bridge
+  # Connect to external proxy network (nginx-proxy-manager)
+  proxy-network:
+    external: true
+    name: docker-server_proxy-network

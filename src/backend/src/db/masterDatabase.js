@@ -1,0 +1,146 @@
+/**
+ * Project Alpine - Master Database Configuration
+ *
+ * Central database that stores user credentials only.
+ * Each user's actual data is stored in their own separate database.
+ */
+
+const { Sequelize, DataTypes } = require('sequelize');
+const path = require('path');
+const fs = require('fs');
+const bcrypt = require('bcrypt');
+const authConfig = require('../config/auth');
+
+// Ensure data directory exists
+const dataDir = path.join(__dirname, '../../data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// Master database path
+const MASTER_DB_PATH = path.join(dataDir, 'master.db');
+
+// Initialize Sequelize for master database
+const masterSequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: MASTER_DB_PATH,
+  logging: process.env.NODE_ENV === 'development' ? console.log : false,
+  define: {
+    underscored: true,
+    timestamps: true,
+  },
+});
+
+// Define User model
+const User = masterSequelize.define('User', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  username: {
+    type: DataTypes.STRING(50),
+    allowNull: false,
+    unique: true,
+    validate: {
+      len: [3, 50],
+      is: /^[a-zA-Z0-9_]+$/i, // alphanumeric and underscores only
+    },
+  },
+  passwordHash: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  displayName: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+  },
+  isAdmin: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+  },
+  lastLoginAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+}, {
+  tableName: 'users',
+  hooks: {
+    beforeCreate: async (user) => {
+      // Check if this is the first user - make them admin
+      const userCount = await User.count();
+      if (userCount === 0) {
+        user.isAdmin = true;
+      }
+    },
+  },
+});
+
+// Instance methods
+User.prototype.validatePassword = async function(password) {
+  return bcrypt.compare(password, this.passwordHash);
+};
+
+User.prototype.toJSON = function() {
+  const values = { ...this.get() };
+  delete values.passwordHash; // Never expose password hash
+  return values;
+};
+
+// Static methods
+User.hashPassword = async function(password) {
+  return bcrypt.hash(password, authConfig.bcryptRounds);
+};
+
+User.findByUsername = async function(username) {
+  return User.findOne({
+    where: {
+      username: username.toLowerCase(),
+    },
+  });
+};
+
+/**
+ * Initialize master database
+ */
+async function initializeMasterDatabase() {
+  try {
+    await masterSequelize.authenticate();
+    console.log('Master database connection established.');
+
+    await masterSequelize.sync({ alter: process.env.NODE_ENV === 'development' });
+    console.log('Master database synchronized.');
+
+    return true;
+  } catch (error) {
+    console.error('Failed to initialize master database:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if any users exist (for first-time setup)
+ */
+async function hasUsers() {
+  const count = await User.count();
+  return count > 0;
+}
+
+/**
+ * Get count of admin users
+ */
+async function getAdminCount() {
+  return User.count({ where: { isAdmin: true, isActive: true } });
+}
+
+module.exports = {
+  masterSequelize,
+  User,
+  initializeMasterDatabase,
+  hasUsers,
+  getAdminCount,
+};
