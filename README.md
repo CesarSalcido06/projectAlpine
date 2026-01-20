@@ -2,7 +2,7 @@
 
 A full-stack productivity application for managing tasks and tracking goals with gamification elements.
 
-**Live Demo:** [alpine.nerdyninja.net](https://alpine.nerdyninja.net)
+**Live Demo:** [alpine.cesarsalcido.xyz](https://alpine.cesarsalcido.xyz)
 
 ## Features
 
