@@ -878,6 +878,52 @@ function getPeriodEndDate(frequency, periodStart) {
 }
 
 /**
+ * Counts the number of period boundaries crossed between two dates.
+ * Uses calendar-aligned boundaries (week starts Sunday, month starts 1st).
+ * @param {string} frequency - The frequency (hourly, daily, weekly, monthly)
+ * @param {Date} fromDate - Start date
+ * @param {Date} toDate - End date
+ * @returns {number} Number of complete periods elapsed
+ */
+function countPeriodsElapsed(frequency, fromDate, toDate) {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+
+  switch (frequency) {
+    case 'hourly': {
+      const diffMs = to.getTime() - from.getTime();
+      return Math.floor(diffMs / (60 * 60 * 1000));
+    }
+    case 'daily': {
+      // Count calendar days between dates
+      const fromDay = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+      const toDay = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+      const diffMs = toDay.getTime() - fromDay.getTime();
+      return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+    }
+    case 'weekly': {
+      // Count calendar weeks (Sunday to Saturday)
+      const fromWeekStart = new Date(from);
+      fromWeekStart.setDate(from.getDate() - from.getDay());
+      fromWeekStart.setHours(0, 0, 0, 0);
+
+      const toWeekStart = new Date(to);
+      toWeekStart.setDate(to.getDate() - to.getDay());
+      toWeekStart.setHours(0, 0, 0, 0);
+
+      const diffMs = toWeekStart.getTime() - fromWeekStart.getTime();
+      return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
+    }
+    case 'monthly': {
+      // Count calendar months
+      return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+    }
+    default:
+      return 0;
+  }
+}
+
+/**
  * Checks and resets tracker periods for all active trackers.
  * This function evaluates elapsed periods and:
  * - Breaks streaks if goals weren't met
@@ -922,17 +968,8 @@ async function checkAndResetTrackerPeriods(models) {
           continue;
         }
 
-        // Calculate how many periods have elapsed
-        let periodsElapsed = 0;
-        let periodCheck = new Date(trackerPeriodStart);
-
-        while (getPeriodEndDate(tracker.frequency, periodCheck) <= now) {
-          periodsElapsed++;
-          periodCheck = getPeriodEndDate(tracker.frequency, periodCheck);
-
-          // Safety limit to prevent infinite loops
-          if (periodsElapsed > 365) break;
-        }
+        // Calculate how many periods have elapsed using calendar-aligned boundaries
+        const periodsElapsed = countPeriodsElapsed(tracker.frequency, trackerPeriodStart, now);
 
         if (periodsElapsed === 0) {
           continue;
@@ -1021,5 +1058,6 @@ module.exports = {
   findActiveTrackerTask,
   getPeriodStartDate,
   getPeriodEndDate,
+  countPeriodsElapsed,
   checkAndResetTrackerPeriods,
 };
