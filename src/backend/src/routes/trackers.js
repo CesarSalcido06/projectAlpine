@@ -12,6 +12,9 @@ const {
   createTrackerTask,
   createAllScheduledTasks,
   generateRecurringTasks,
+  checkAndResetTrackerPeriods,
+  getPeriodStartDate,
+  getPeriodEndDate,
 } = require('../utils/taskGenerator');
 
 const router = express.Router();
@@ -59,6 +62,9 @@ router.get('/', async (req, res) => {
   try {
     const { Tracker, Task } = req.models;
 
+    // First: Check and reset any expired tracker periods (lazy evaluation)
+    await checkAndResetTrackerPeriods(req.models);
+
     // Lazy generation: ensure recurring tasks exist for current period
     await generateRecurringTasks(req.models);
 
@@ -81,12 +87,31 @@ router.get('/', async (req, res) => {
       ],
     });
 
+    const now = new Date();
+
     // Enhance with computed fields and filter to first pending task
     const enhanced = trackers.map((tracker) => {
       const data = tracker.toJSON();
       data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
       data.xpProgress = getXPProgress(data.totalXP, data.level);
       data.streakMultiplier = getStreakMultiplier(data.currentStreak);
+
+      // Calculate if tracker is overdue (current period goal not met and time running out)
+      // Overdue = past 75% of the period without completing the goal
+      if (data.isActive && !data.isPaused && data.currentValue < data.targetValue) {
+        const periodStart = getPeriodStartDate(data.frequency);
+        const periodEnd = getPeriodEndDate(data.frequency, periodStart);
+        const periodDuration = periodEnd.getTime() - periodStart.getTime();
+        const elapsed = now.getTime() - periodStart.getTime();
+        const percentElapsed = elapsed / periodDuration;
+
+        data.isOverdue = percentElapsed > 0.75;
+        data.periodProgress = Math.min(100, Math.round(percentElapsed * 100));
+      } else {
+        data.isOverdue = false;
+        data.periodProgress = 0;
+      }
+
       // Sort tasks by due date and take only the first one
       if (data.tasks && data.tasks.length > 0) {
         data.tasks.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
@@ -382,10 +407,14 @@ router.post('/:id/log', async (req, res) => {
         successfulPeriods: tracker.successfulPeriods + (wasSuccessful ? 1 : 0),
         // Reset streak if period was missed
         currentStreak: wasSuccessful ? tracker.currentStreak : 0,
+        // Reset consecutiveMissed since user is actively logging
+        consecutiveMissed: 0,
       });
     } else {
       await tracker.update({
         currentValue: tracker.currentValue + value,
+        // Reset consecutiveMissed since user is actively logging
+        consecutiveMissed: 0,
       });
     }
 

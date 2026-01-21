@@ -848,6 +848,163 @@ function getDayName(dayNum) {
   return days[dayNum] || 'Unknown';
 }
 
+/**
+ * Calculates the end date of a period given a start date and frequency.
+ * @param {string} frequency - The frequency (hourly, daily, weekly, monthly)
+ * @param {Date} periodStart - The start of the period
+ * @returns {Date} The end of the period
+ */
+function getPeriodEndDate(frequency, periodStart) {
+  const end = new Date(periodStart);
+
+  switch (frequency) {
+    case 'hourly':
+      end.setHours(end.getHours() + 1);
+      break;
+    case 'daily':
+      end.setDate(end.getDate() + 1);
+      break;
+    case 'weekly':
+      end.setDate(end.getDate() + 7);
+      break;
+    case 'monthly':
+      end.setMonth(end.getMonth() + 1);
+      break;
+    default:
+      end.setDate(end.getDate() + 1);
+  }
+
+  return end;
+}
+
+/**
+ * Checks and resets tracker periods for all active trackers.
+ * This function evaluates elapsed periods and:
+ * - Breaks streaks if goals weren't met
+ * - Resets currentValue for new periods
+ * - Tracks consecutiveMissed periods
+ * - Auto-archives trackers with 7+ consecutive misses
+ *
+ * @param {Object} models - User-specific models
+ * @returns {Promise<{evaluated: number, reset: number, archived: number}>} Results
+ */
+async function checkAndResetTrackerPeriods(models) {
+  const { Tracker } = models;
+
+  const results = {
+    evaluated: 0,
+    reset: 0,
+    archived: 0,
+    errors: [],
+  };
+
+  try {
+    // Get all active, non-paused trackers
+    const trackers = await Tracker.findAll({
+      where: {
+        isActive: true,
+        isPaused: false,
+      },
+    });
+
+    const now = new Date();
+
+    for (const tracker of trackers) {
+      try {
+        results.evaluated++;
+
+        // Get the current period start for this frequency
+        const currentPeriodStart = getPeriodStartDate(tracker.frequency);
+        const trackerPeriodStart = new Date(tracker.periodStartDate);
+
+        // If tracker's period is already current, no reset needed
+        if (trackerPeriodStart >= currentPeriodStart) {
+          continue;
+        }
+
+        // Calculate how many periods have elapsed
+        let periodsElapsed = 0;
+        let periodCheck = new Date(trackerPeriodStart);
+
+        while (getPeriodEndDate(tracker.frequency, periodCheck) <= now) {
+          periodsElapsed++;
+          periodCheck = getPeriodEndDate(tracker.frequency, periodCheck);
+
+          // Safety limit to prevent infinite loops
+          if (periodsElapsed > 365) break;
+        }
+
+        if (periodsElapsed === 0) {
+          continue;
+        }
+
+        // Evaluate each missed period
+        let newStreak = tracker.currentStreak;
+        let newConsecutiveMissed = tracker.consecutiveMissed || 0;
+        let totalPeriodsToAdd = periodsElapsed;
+        let successfulPeriodsToAdd = 0;
+
+        // The first elapsed period might have been completed
+        // (if currentValue >= targetValue when that period ended)
+        const wasFirstPeriodComplete = tracker.currentValue >= tracker.targetValue;
+
+        if (wasFirstPeriodComplete) {
+          // First period was successful
+          newStreak++;
+          successfulPeriodsToAdd++;
+          newConsecutiveMissed = 0;
+
+          // Remaining periods (2nd onward) were all missed
+          const missedPeriods = periodsElapsed - 1;
+          if (missedPeriods > 0) {
+            newStreak = 0; // Streak broken
+            newConsecutiveMissed = missedPeriods;
+          }
+        } else {
+          // First period was NOT completed, all periods are missed
+          newStreak = 0;
+          newConsecutiveMissed += periodsElapsed;
+        }
+
+        // Update best streak if applicable
+        const newBestStreak = Math.max(tracker.bestStreak, newStreak);
+
+        // Check for auto-archive (7+ consecutive missed periods)
+        const shouldArchive = newConsecutiveMissed >= 7;
+
+        // Update the tracker
+        await tracker.update({
+          currentValue: 0,
+          periodStartDate: currentPeriodStart,
+          currentStreak: newStreak,
+          bestStreak: newBestStreak,
+          consecutiveMissed: newConsecutiveMissed,
+          totalPeriods: tracker.totalPeriods + totalPeriodsToAdd,
+          successfulPeriods: tracker.successfulPeriods + successfulPeriodsToAdd,
+          isActive: !shouldArchive,
+        });
+
+        results.reset++;
+
+        if (shouldArchive) {
+          results.archived++;
+          console.log(`Auto-archived tracker "${tracker.name}" after ${newConsecutiveMissed} consecutive missed periods`);
+        } else {
+          console.log(`Reset tracker "${tracker.name}": ${periodsElapsed} periods elapsed, streak=${newStreak}, missed=${newConsecutiveMissed}`);
+        }
+      } catch (error) {
+        console.error(`Error resetting tracker ${tracker.id}:`, error);
+        results.errors.push({ trackerId: tracker.id, error: error.message });
+      }
+    }
+
+    return results;
+  } catch (error) {
+    console.error('Error in checkAndResetTrackerPeriods:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   TRACKED_TAG_NAME,
   TRACKED_TAG_COLOR,
@@ -863,4 +1020,6 @@ module.exports = {
   isTodayScheduled,
   findActiveTrackerTask,
   getPeriodStartDate,
+  getPeriodEndDate,
+  checkAndResetTrackerPeriods,
 };

@@ -125,6 +125,11 @@ function defineTracker(sequelize) {
       type: DataTypes.INTEGER,
       defaultValue: 0,
     },
+    consecutiveMissed: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      comment: 'Consecutive missed periods - auto-archive after 7',
+    },
 
     // Status
     isActive: {

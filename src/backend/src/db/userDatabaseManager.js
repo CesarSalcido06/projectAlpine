@@ -76,6 +76,29 @@ async function getUserDatabase(userId) {
 }
 
 /**
+ * Apply schema migrations to add new columns safely
+ */
+async function applyMigrations(sequelize) {
+  const queryInterface = sequelize.getQueryInterface();
+
+  // Migration: Add consecutiveMissed column to trackers table
+  try {
+    const tableInfo = await queryInterface.describeTable('trackers');
+    if (!tableInfo.consecutive_missed) {
+      await sequelize.query(
+        'ALTER TABLE trackers ADD COLUMN consecutive_missed INTEGER DEFAULT 0'
+      );
+      console.log('Migration: Added consecutive_missed column to trackers');
+    }
+  } catch (err) {
+    // Table might not exist yet, which is fine - it will be created by sync
+    if (!err.message.includes('no such table')) {
+      console.error('Migration error:', err.message);
+    }
+  }
+}
+
+/**
  * Initialize a new user's database with models and default data
  */
 async function initializeUserDatabase(userId, models) {
@@ -85,8 +108,11 @@ async function initializeUserDatabase(userId, models) {
   // Only sync if this database hasn't been initialized yet this session
   if (!initializedDatabases.has(userId)) {
     // Use force: false to only create tables if they don't exist
-    // Don't use alter in development - it's slow and causes issues
     await sequelize.sync({ force: false });
+
+    // Apply migrations for new columns
+    await applyMigrations(sequelize);
+
     initializedDatabases.add(userId);
 
     // Create default category if it doesn't exist
