@@ -412,6 +412,13 @@ router.put('/:id', async (req, res) => {
         },
       });
 
+      // Reset completion state so user can complete the new schedule
+      // This prevents "already completed today" blocking new tasks
+      await tracker.update({
+        lastCompletedAt: null,
+        currentValue: 0,
+      });
+
       // Regenerate tasks with new schedule - use createAllScheduledTasks directly for this tracker
       await tracker.reload();
       const { createAllScheduledTasks } = require('../utils/taskGenerator');
