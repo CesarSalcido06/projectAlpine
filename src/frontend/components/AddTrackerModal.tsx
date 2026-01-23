@@ -353,18 +353,29 @@ export default function AddTrackerModal({
                   {(frequency === 'daily' || frequency === 'weekly' || frequency === 'monthly') && (
                     <FormControl>
                       <FormLabel fontSize="sm">Due Time</FormLabel>
-                      <Input
-                        type="time"
-                        value={scheduledTime}
-                        onChange={(e) => setScheduledTime(e.target.value)}
-                        bg="dark.bg"
-                        border="1px"
-                        borderColor="dark.border"
-                        _focus={{ borderColor: 'brand.500' }}
-                        w="150px"
-                      />
+                      <HStack spacing={3}>
+                        <Input
+                          type="time"
+                          value={scheduledTime}
+                          onChange={(e) => setScheduledTime(e.target.value)}
+                          bg="dark.bg"
+                          border="1px"
+                          borderColor="dark.border"
+                          _focus={{ borderColor: 'brand.500' }}
+                          w="150px"
+                        />
+                        <Button
+                          size="sm"
+                          variant={scheduledTime === '23:59' ? 'solid' : 'outline'}
+                          colorScheme="purple"
+                          onClick={() => setScheduledTime('23:59')}
+                          px={4}
+                        >
+                          EOD
+                        </Button>
+                      </HStack>
                       <FormHelperText>
-                        Time when the task is due
+                        Select a time or click EOD for end of day (11:59 PM)
                       </FormHelperText>
                     </FormControl>
                   )}

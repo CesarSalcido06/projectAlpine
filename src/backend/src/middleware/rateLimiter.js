@@ -43,8 +43,23 @@ const sensitiveLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/**
+ * Strict rate limiter for guest session creation
+ * 5 attempts per hour per IP to prevent DDOS/abuse
+ * Does NOT skip successful requests (unlike authLimiter)
+ */
+const guestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Too many guest sessions created. Please try again in an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // Count ALL requests
+});
+
 module.exports = {
   apiLimiter,
   authLimiter,
   sensitiveLimiter,
+  guestLimiter,
 };

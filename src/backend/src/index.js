@@ -23,6 +23,9 @@ const { requireAuth, requireAdmin } = require('./middleware/auth');
 // Rate limiting middleware
 const { apiLimiter, sensitiveLimiter } = require('./middleware/rateLimiter');
 
+// Guest cleanup service
+const { startGuestCleanupService } = require('./services/guestCleanup');
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
@@ -158,6 +161,9 @@ async function startServer() {
     if (!masterInitialized) {
       throw new Error('Failed to initialize master database');
     }
+
+    // Start guest cleanup service (removes expired guest users periodically)
+    startGuestCleanupService();
 
     // Start listening on all interfaces (0.0.0.0) to allow network access
     app.listen(PORT, '0.0.0.0', () => {

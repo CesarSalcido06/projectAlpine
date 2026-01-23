@@ -10,8 +10,8 @@ const router = express.Router();
 const { User, hasUsers, initializeMasterDatabase } = require('../db/masterDatabase');
 const authConfig = require('../config/auth');
 const { requireAuth, generateToken, setAuthCookie, clearAuthCookie } = require('../middleware/auth');
-const { authLimiter } = require('../middleware/rateLimiter');
-const { getUserDatabase, initializeUserDatabase } = require('../db/userDatabaseManager');
+const { authLimiter, guestLimiter } = require('../middleware/rateLimiter');
+const { getUserDatabase, initializeUserDatabase, deleteUserDatabase } = require('../db/userDatabaseManager');
 const { getModelsForUser } = require('../models');
 
 /**
@@ -143,19 +143,42 @@ router.post('/login', authLimiter, async (req, res) => {
 
 /**
  * POST /api/auth/logout
- * Clear auth cookie
+ * Clear auth cookie and clean up guest data if applicable
  */
-router.post('/logout', (req, res) => {
-  clearAuthCookie(res);
-  res.json({ message: 'Logged out successfully' });
+router.post('/logout', requireAuth, async (req, res) => {
+  try {
+    const user = req.user;
+
+    // If this is a guest user, delete their account and database
+    if (user && user.isGuest) {
+      const userId = user.id;
+
+      // Delete the user's database first
+      await deleteUserDatabase(userId);
+
+      // Delete the user from master database
+      await user.destroy();
+
+      console.log(`Guest user ${user.username} logged out and cleaned up`);
+    }
+
+    clearAuthCookie(res);
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    // Still clear the cookie even if cleanup fails
+    clearAuthCookie(res);
+    res.json({ message: 'Logged out successfully' });
+  }
 });
 
 /**
  * POST /api/auth/guest
  * Create a temporary guest session for demo purposes
  * Guest sessions expire after 24 hours
+ * Strictly rate limited (5/hour) to prevent DDOS/abuse
  */
-router.post('/guest', async (req, res) => {
+router.post('/guest', guestLimiter, async (req, res) => {
   try {
     // Generate unique guest username
     const timestamp = Date.now();

@@ -411,13 +411,12 @@ router.put('/:id', async (req, res) => {
           status: ['pending', 'in_progress'],
         },
       });
-      console.log(`Deleted ${deleted} old tasks for tracker "${tracker.name}" due to schedule change`);
 
-      // Regenerate tasks with new schedule
+      // Regenerate tasks with new schedule - use createAllScheduledTasks directly for this tracker
       await tracker.reload();
-      const { generateRecurringTasks } = require('../utils/taskGenerator');
-      await generateRecurringTasks(req.models);
-      console.log(`Regenerated tasks for tracker "${tracker.name}"`);
+      const { createAllScheduledTasks } = require('../utils/taskGenerator');
+      const newTasks = await createAllScheduledTasks(req.models, tracker);
+      console.log(`Tracker "${tracker.name}" schedule updated: deleted ${deleted} old tasks, created ${newTasks.length} new tasks`);
     }
 
     res.json(tracker);
