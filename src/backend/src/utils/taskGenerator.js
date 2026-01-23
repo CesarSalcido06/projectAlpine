@@ -169,29 +169,40 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
     }
 
     case 'weekly': {
-      // All scheduled days within this week
+      // Get the next N scheduled occurrences (not limited to current week)
       const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
         ? tracker.scheduledDays.sort((a, b) => a - b)
         : [0]; // Default to Sunday if no days specified
 
-      // Get the Sunday of this week using Date.UTC for proper month rollover
-      const dayOfWeek = now.getUTCDay();
-      const sundayDate = date - dayOfWeek;
-
-      // Get start of today (midnight UTC) for comparison
+      // Start of today (midnight UTC)
       const todayStart = Date.UTC(year, month, date, 0, 0, 0, 0);
+      const currentDayOfWeek = now.getUTCDay();
 
-      for (const targetDay of scheduledDays) {
-        // Calculate the date for this day of the week
-        const targetDate = sundayDate + targetDay;
-        const occurrence = createUTCDate(year, month, targetDate, hours, minutes);
+      // Find occurrences for today and the next 2 weeks to cover all upcoming scheduled days
+      for (let weekOffset = 0; weekOffset < 2; weekOffset++) {
+        for (const targetDay of scheduledDays) {
+          // Calculate days until this target day
+          let daysUntil = targetDay - currentDayOfWeek + (weekOffset * 7);
 
-        // Only include if within period bounds AND not in the past
-        // Tasks should only be created for today or future dates
-        if (occurrence >= periodStart && occurrence < periodEnd && occurrence.getTime() >= todayStart) {
-          occurrences.push(occurrence);
+          // For current week (offset 0), skip days that are in the past
+          if (weekOffset === 0 && daysUntil < 0) {
+            continue;
+          }
+
+          const targetDate = date + daysUntil;
+          const occurrence = createUTCDate(year, month, targetDate, hours, minutes);
+
+          // Only include if today or future
+          if (occurrence.getTime() >= todayStart) {
+            occurrences.push(occurrence);
+          }
         }
       }
+
+      // Sort by date and limit to the number of scheduled days per week
+      occurrences.sort((a, b) => a.getTime() - b.getTime());
+      // Keep only the next N occurrences (where N = number of scheduled days)
+      occurrences.splice(scheduledDays.length);
       break;
     }
 
