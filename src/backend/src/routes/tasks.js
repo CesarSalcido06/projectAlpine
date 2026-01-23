@@ -133,9 +133,9 @@ async function logProgressToTracker(models, trackerId, task, value = 1) {
     const newLevel = calculateLevel(newTotalXP);
     const leveledUp = newLevel > tracker.level;
 
-    // Update tracker
+    // Update tracker - increment currentValue (resets at period boundary)
     await tracker.update({
-      currentValue: 0, // Reset for next occurrence
+      currentValue: tracker.currentValue + value,
       totalXP: newTotalXP,
       level: newLevel,
       totalCompletions: tracker.totalCompletions + 1,

@@ -327,17 +327,27 @@ async function createTrackerTask(models, tracker, dueDate) {
 /**
  * Archives stale tasks (past due date, not completed).
  * For period-based: archives tasks from PREVIOUS periods.
+ * Also resets tracker's currentValue when a new period starts.
  *
  * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to clean up
  * @returns {Promise<number>} Number of tasks archived
  */
 async function archiveStaleTasks(models, tracker) {
-  const { Task } = models;
+  const { Task, Tracker } = models;
   const now = new Date();
 
   // Get the start of current period - anything before this is stale
   const { start: periodStart } = getCurrentPeriodBounds(tracker.frequency, now);
+
+  // Check if we need to reset currentValue for the new period
+  // If lastCompletedAt is before periodStart, we're in a new period
+  if (tracker.lastCompletedAt && new Date(tracker.lastCompletedAt) < periodStart) {
+    if (tracker.currentValue > 0) {
+      await tracker.update({ currentValue: 0 });
+      console.log(`Reset currentValue for tracker "${tracker.name}" (new period)`);
+    }
+  }
 
   // Find pending/in_progress tasks with due date before current period
   const staleTasks = await Task.findAll({
