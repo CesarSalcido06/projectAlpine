@@ -78,9 +78,29 @@ export default function TrackerCard({
   const frequencyLabels: Record<string, string> = {
     hourly: 'per hour',
     daily: 'per day',
-    weekly: 'per week',
-    monthly: 'per month',
+    weekly: 'per session',  // Changed to reflect occurrence-based
+    monthly: 'per session',
   };
+
+  // Progress label based on frequency
+  const getProgressLabel = (): string => {
+    const pendingCount = (tracker as any).pendingCount || 0;
+    switch (tracker.frequency) {
+      case 'hourly':
+        return 'This Hour';
+      case 'daily':
+        return 'Today';
+      case 'weekly':
+        return pendingCount > 1 ? `${pendingCount} sessions this week` : 'This Session';
+      case 'monthly':
+        return pendingCount > 1 ? `${pendingCount} sessions this month` : 'This Session';
+      default:
+        return 'Progress';
+    }
+  };
+
+  // Check if overdue
+  const isOverdue = (tracker as any).isOverdue || false;
 
   return (
     <Box
@@ -169,7 +189,12 @@ export default function TrackerCard({
         {/* Goal Progress */}
         <Box>
           <HStack justify="space-between" mb={2}>
-            <Text fontSize="sm" color="gray.400">Today's Progress</Text>
+            <HStack spacing={2}>
+              <Text fontSize="sm" color="gray.400">{getProgressLabel()}</Text>
+              {isOverdue && (
+                <Badge colorScheme="red" fontSize="xs">OVERDUE</Badge>
+              )}
+            </HStack>
             <Text fontSize="sm" fontWeight="bold">
               {tracker.currentValue} / {tracker.targetValue} {tracker.targetUnit}
             </Text>
@@ -210,18 +235,20 @@ export default function TrackerCard({
             borderRadius="lg"
             p={3}
             border="1px"
-            borderColor="purple.600"
+            borderColor={isOverdue ? 'red.500' : 'purple.600'}
           >
             <HStack justify="space-between" align="start">
               <VStack align="start" spacing={1} flex={1}>
                 <HStack spacing={2}>
-                  <Badge colorScheme="purple" fontSize="xs">TASK</Badge>
+                  <Badge colorScheme={isOverdue ? 'red' : 'purple'} fontSize="xs">
+                    {isOverdue ? 'OVERDUE' : 'NEXT'}
+                  </Badge>
                   <Text fontSize="sm" fontWeight="semibold" noOfLines={1}>
                     {pendingTask.title}
                   </Text>
                 </HStack>
                 {pendingTask.dueDate && (
-                  <Text fontSize="xs" color="gray.400">
+                  <Text fontSize="xs" color={isOverdue ? 'red.300' : 'gray.400'}>
                     Due: {formatDueTime(pendingTask.dueDate)}
                   </Text>
                 )}

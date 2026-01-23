@@ -9,13 +9,15 @@ const { DataTypes } = require('sequelize');
 // Valid frequencies
 const FREQUENCIES = ['hourly', 'daily', 'weekly', 'monthly'];
 
-// XP rewards configuration
+// XP rewards configuration (per occurrence, not per period)
+// Values are balanced for occurrence-based tracking where each
+// scheduled time is its own completion opportunity
 const XP_REWARDS = {
-  hourly: 5,
-  daily: 10,
-  weekly: 50,
-  monthly: 200,
-  streakBonus: 0.1, // 10% bonus per streak
+  hourly: 2,      // Low per occurrence since many per day
+  daily: 5,       // Per day
+  weekly: 15,     // Per scheduled day (e.g., 3x/week = 45 XP/week)
+  monthly: 25,    // Per scheduled date
+  streakBonus: 0.1, // 10% bonus per consecutive occurrence
   maxStreakMultiplier: 2.0,
 };
 
@@ -78,14 +80,16 @@ function defineTracker(sequelize) {
       defaultValue: 'daily',
     },
 
-    // Current period progress
+    // Current occurrence progress (resets per occurrence, not per period)
     currentValue: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
+      comment: 'Progress toward current occurrence goal (e.g., 1 of 1 for BJJ)',
     },
     periodStartDate: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW,
+      comment: 'When the tracker was created (legacy field, kept for compatibility)',
     },
 
     // Gamification - XP & Levels
@@ -110,6 +114,12 @@ function defineTracker(sequelize) {
     lastCompletedAt: {
       type: DataTypes.DATE,
       allowNull: true,
+      comment: 'When the last occurrence was completed',
+    },
+    lastOccurrenceDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'The due date of the last scheduled occurrence (for streak tracking)',
     },
 
     // Lifetime stats
@@ -120,15 +130,17 @@ function defineTracker(sequelize) {
     totalPeriods: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
+      comment: 'Total scheduled occurrences that have passed',
     },
     successfulPeriods: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
+      comment: 'Occurrences completed on time',
     },
     consecutiveMissed: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
-      comment: 'Consecutive missed periods - auto-archive after 7',
+      comment: 'Consecutive missed occurrences - auto-archive after 7',
     },
 
     // Status

@@ -35,6 +35,8 @@ export interface TrackerUpdateSummary {
   totalXP: number;
   level: number;
   currentStreak: number;
+  xpEarned?: number;
+  leveledUp?: boolean;
 }
 
 // Task definition
@@ -182,6 +184,12 @@ export interface Tracker {
   xpEarned?: number;
   leveledUp?: boolean;
   goalCompleted?: boolean;
+  // Occurrence-based tracking fields
+  lastOccurrenceDate?: string | null;
+  nextOccurrence?: string; // Next scheduled occurrence date
+  pendingCount?: number; // Number of pending tasks for this tracker
+  isOverdue?: boolean; // Whether the next task is overdue
+  streakBroken?: boolean; // Whether the streak was broken on last completion
   // Associated tasks (pending tasks for this tracker)
   tasks?: Task[];
 }

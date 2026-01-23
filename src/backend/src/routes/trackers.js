@@ -1,7 +1,9 @@
 /**
- * Project Alpine - Tracker Routes
+ * Project Alpine - Tracker Routes (Occurrence-Based)
  *
  * REST API endpoints for gamified goal tracking.
+ * Each scheduled occurrence is independent - streaks count
+ * consecutive occurrences, not periods.
  */
 
 const express = require('express');
@@ -12,9 +14,9 @@ const {
   createTrackerTask,
   createAllScheduledTasks,
   generateRecurringTasks,
-  checkAndResetTrackerPeriods,
-  getPeriodStartDate,
-  getPeriodEndDate,
+  createNextTrackerTask,
+  checkMissedOccurrences,
+  getNextScheduledOccurrences,
 } = require('../utils/taskGenerator');
 
 const router = express.Router();
@@ -55,6 +57,46 @@ function getStreakMultiplier(streak) {
   return Math.min(1 + streak * XP_REWARDS.streakBonus, XP_REWARDS.maxStreakMultiplier);
 }
 
+/**
+ * Checks if today is a scheduled day for the tracker.
+ */
+function isTodayScheduledDay(tracker) {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  const dateOfMonth = today.getDate();
+
+  switch (tracker.frequency) {
+    case 'hourly':
+    case 'daily':
+      return true;
+    case 'weekly':
+      if (!tracker.scheduledDays || tracker.scheduledDays.length === 0) return true;
+      return tracker.scheduledDays.includes(dayOfWeek);
+    case 'monthly':
+      if (!tracker.scheduledDatesOfMonth || tracker.scheduledDatesOfMonth.length === 0) return true;
+      return tracker.scheduledDatesOfMonth.includes(dateOfMonth);
+    default:
+      return true;
+  }
+}
+
+/**
+ * Checks if the tracker has already been completed today.
+ */
+function isAlreadyCompletedToday(tracker) {
+  if (!tracker.lastCompletedAt) return false;
+
+  const lastCompleted = new Date(tracker.lastCompletedAt);
+  const today = new Date();
+
+  if (tracker.frequency === 'hourly') {
+    return lastCompleted.toDateString() === today.toDateString() &&
+           lastCompleted.getHours() === today.getHours();
+  }
+
+  return lastCompleted.toDateString() === today.toDateString();
+}
+
 // ============================================================
 // GET /api/trackers - List all trackers
 // ============================================================
@@ -62,10 +104,7 @@ router.get('/', async (req, res) => {
   try {
     const { Tracker, Task } = req.models;
 
-    // First: Check and reset any expired tracker periods (lazy evaluation)
-    await checkAndResetTrackerPeriods(req.models);
-
-    // Lazy generation: ensure recurring tasks exist for current period
+    // Generate any missing tasks for upcoming occurrences
     await generateRecurringTasks(req.models);
 
     const { active } = req.query;
@@ -83,40 +122,47 @@ router.get('/', async (req, res) => {
           as: 'tasks',
           where: { status: { [Op.in]: ['pending', 'in_progress'] } },
           required: false,
+          order: [['dueDate', 'ASC']],
         },
       ],
     });
 
     const now = new Date();
 
-    // Enhance with computed fields and filter to first pending task
+    // Enhance with computed fields
     const enhanced = trackers.map((tracker) => {
       const data = tracker.toJSON();
+
+      // Progress is per occurrence (e.g., 1 of 1 for today's BJJ)
       data.progressPercentage = Math.min(100, Math.round((data.currentValue / data.targetValue) * 100));
       data.xpProgress = getXPProgress(data.totalXP, data.level);
       data.streakMultiplier = getStreakMultiplier(data.currentStreak);
 
-      // Calculate if tracker is overdue (current period goal not met and time running out)
-      // Overdue = past 75% of the period without completing the goal
-      if (data.isActive && !data.isPaused && data.currentValue < data.targetValue) {
-        const periodStart = getPeriodStartDate(data.frequency);
-        const periodEnd = getPeriodEndDate(data.frequency, periodStart);
-        const periodDuration = periodEnd.getTime() - periodStart.getTime();
-        const elapsed = now.getTime() - periodStart.getTime();
-        const percentElapsed = elapsed / periodDuration;
-
-        data.isOverdue = percentElapsed > 0.75;
-        data.periodProgress = Math.min(100, Math.round(percentElapsed * 100));
-      } else {
-        data.isOverdue = false;
-        data.periodProgress = 0;
+      // Get next occurrence info
+      const nextOccurrences = getNextScheduledOccurrences(tracker, now, 1);
+      if (nextOccurrences.length > 0) {
+        data.nextOccurrence = nextOccurrences[0].toISOString();
       }
 
-      // Sort tasks by due date and take only the first one
+      // Calculate pending count for this frequency
       if (data.tasks && data.tasks.length > 0) {
         data.tasks.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+        data.pendingCount = data.tasks.length;
+        // Keep only first task for display
         data.tasks = [data.tasks[0]];
+      } else {
+        data.pendingCount = 0;
       }
+
+      // Check if any pending task is overdue
+      if (data.tasks && data.tasks.length > 0) {
+        const firstTask = data.tasks[0];
+        const taskDue = new Date(firstTask.dueDate);
+        data.isOverdue = taskDue < now;
+      } else {
+        data.isOverdue = false;
+      }
+
       return data;
     });
 
@@ -161,7 +207,6 @@ router.get('/stats', async (req, res) => {
 
 // ============================================================
 // GET /api/trackers/tracked-tag - Get or create the "tracked" tag
-// NOTE: This route must be defined before /:id to avoid route conflicts
 // ============================================================
 router.get('/tracked-tag', async (req, res) => {
   try {
@@ -174,8 +219,7 @@ router.get('/tracked-tag', async (req, res) => {
 });
 
 // ============================================================
-// POST /api/trackers/generate-tasks - Generate recurring tasks for all trackers
-// NOTE: This route must be defined before /:id to avoid route conflicts
+// POST /api/trackers/generate-tasks - Generate recurring tasks
 // ============================================================
 router.post('/generate-tasks', async (req, res) => {
   try {
@@ -185,9 +229,9 @@ router.post('/generate-tasks', async (req, res) => {
       message: 'Task generation completed',
       created: results.created.length,
       skipped: results.skipped,
+      archived: results.archived,
       errors: results.errors.length,
       tasks: results.created,
-      errorDetails: results.errors.length > 0 ? results.errors : undefined,
     });
   } catch (error) {
     console.error('Error generating recurring tasks:', error);
@@ -291,7 +335,7 @@ router.post('/', async (req, res) => {
       targetValue: targetValue || 1,
       targetUnit: targetUnit || 'times',
       frequency: frequency || 'daily',
-      generateTasks: true, // Always enabled - task generation is mandatory
+      generateTasks: true, // Always enabled
       taskCategoryId,
       taskUrgency: taskUrgency || 'medium',
       periodStartDate: new Date(),
@@ -300,20 +344,19 @@ router.post('/', async (req, res) => {
       scheduledDatesOfMonth: scheduledDatesOfMonth || null,
     });
 
-    // Task generation is always enabled - create tasks for all scheduled occurrences
+    // Create tasks for upcoming occurrences
     let generatedTasks = [];
     try {
       generatedTasks = await createAllScheduledTasks(req.models, tracker);
       console.log(`Generated ${generatedTasks.length} task(s) for tracker "${tracker.name}"`);
     } catch (taskError) {
       console.error('Error generating initial tasks:', taskError);
-      // Don't fail the tracker creation, just log the error
     }
 
     const response = tracker.toJSON();
     if (generatedTasks.length > 0) {
       response.generatedTasks = generatedTasks;
-      response.generatedTask = generatedTasks[0]; // Keep for backwards compatibility
+      response.generatedTask = generatedTasks[0];
     }
 
     res.status(201).json(response);
@@ -341,7 +384,6 @@ router.put('/:id', async (req, res) => {
       'targetValue', 'targetUnit', 'frequency',
       'isActive', 'isPaused', 'taskCategoryId', 'taskUrgency',
       'scheduledTime', 'scheduledDays', 'scheduledDatesOfMonth',
-      // Note: generateTasks is not allowed to be updated - it's always true
     ];
 
     const updates = {};
@@ -360,7 +402,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // ============================================================
-// POST /api/trackers/:id/log - Log progress
+// POST /api/trackers/:id/log - Log progress (occurrence-based)
 // ============================================================
 router.post('/:id/log', async (req, res) => {
   try {
@@ -372,93 +414,111 @@ router.post('/:id/log', async (req, res) => {
       return res.status(404).json({ error: 'Tracker not found' });
     }
 
+    // Validation: Is today a scheduled day?
+    if (!isTodayScheduledDay(tracker)) {
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const today = dayNames[new Date().getDay()];
+      let scheduledStr = '';
+
+      if (tracker.frequency === 'weekly' && tracker.scheduledDays?.length > 0) {
+        scheduledStr = tracker.scheduledDays.map(d => dayNames[d]).join(', ');
+      } else if (tracker.frequency === 'monthly' && tracker.scheduledDatesOfMonth?.length > 0) {
+        scheduledStr = tracker.scheduledDatesOfMonth.join(', ');
+      }
+
+      return res.status(400).json({
+        error: 'Not a scheduled day',
+        message: `This tracker is not scheduled for ${today}. Scheduled: ${scheduledStr}`,
+      });
+    }
+
+    // Validation: Already completed today? (only if targetValue is 1)
+    if (tracker.targetValue === 1 && isAlreadyCompletedToday(tracker)) {
+      return res.status(400).json({
+        error: 'Already completed today',
+        message: 'This tracker has already been completed today. Come back tomorrow!',
+      });
+    }
+
     const { value = 1 } = req.body;
-
-    // Check if we need to reset for new period
     const now = new Date();
-    const periodStart = new Date(tracker.periodStartDate);
-    let needsReset = false;
 
-    switch (tracker.frequency) {
-      case 'hourly':
-        needsReset = now.getTime() - periodStart.getTime() > 3600000;
-        break;
-      case 'daily':
-        needsReset = now.toDateString() !== periodStart.toDateString();
-        break;
-      case 'weekly':
-        const weekMs = 7 * 24 * 60 * 60 * 1000;
-        needsReset = now.getTime() - periodStart.getTime() > weekMs;
-        break;
-      case 'monthly':
-        needsReset = now.getMonth() !== periodStart.getMonth() ||
-          now.getFullYear() !== periodStart.getFullYear();
-        break;
-    }
+    // Find the current/next pending task for this tracker
+    const pendingTask = await Task.findOne({
+      where: {
+        trackerId: tracker.id,
+        status: { [Op.in]: ['pending', 'in_progress'] },
+      },
+      order: [['dueDate', 'ASC']],
+    });
 
-    if (needsReset) {
-      // Check if previous period was successful
-      const wasSuccessful = tracker.currentValue >= tracker.targetValue;
+    // Determine the occurrence date (from task or now)
+    const occurrenceDate = pendingTask ? new Date(pendingTask.dueDate) : now;
 
-      await tracker.update({
-        currentValue: value,
-        periodStartDate: now,
-        totalPeriods: tracker.totalPeriods + 1,
-        successfulPeriods: tracker.successfulPeriods + (wasSuccessful ? 1 : 0),
-        // Reset streak if period was missed
-        currentStreak: wasSuccessful ? tracker.currentStreak : 0,
-        // Reset consecutiveMissed since user is actively logging
-        consecutiveMissed: 0,
-      });
-    } else {
-      await tracker.update({
-        currentValue: tracker.currentValue + value,
-        // Reset consecutiveMissed since user is actively logging
-        consecutiveMissed: 0,
-      });
-    }
+    // Check if we missed the previous occurrence (for streak calculation)
+    const { streakBroken } = await checkMissedOccurrences(req.models, tracker, occurrenceDate);
 
-    // Check if goal completed this period
-    const goalCompleted = tracker.currentValue >= tracker.targetValue;
+    // Update current value
+    const newCurrentValue = tracker.currentValue + value;
+    const goalCompleted = newCurrentValue >= tracker.targetValue;
+
     let xpEarned = 0;
     let leveledUp = false;
     let newLevel = tracker.level;
+    let newStreak = tracker.currentStreak;
 
-    let completedTask = null;
-    if (goalCompleted && !tracker.lastCompletedAt) {
-      // First completion of this period - award XP
+    // Update tracker
+    const updates = {
+      currentValue: newCurrentValue,
+      consecutiveMissed: 0, // Reset since user is actively logging
+    };
+
+    if (goalCompleted) {
+      // Goal completed for this occurrence
       const baseXP = XP_REWARDS[tracker.frequency];
-      const multiplier = getStreakMultiplier(tracker.currentStreak);
+
+      // Handle streak
+      if (streakBroken) {
+        newStreak = 1; // Start fresh streak
+      } else {
+        newStreak = tracker.currentStreak + 1;
+      }
+
+      const multiplier = getStreakMultiplier(newStreak);
       xpEarned = Math.round(baseXP * multiplier);
 
       const newTotalXP = tracker.totalXP + xpEarned;
       newLevel = calculateLevel(newTotalXP);
       leveledUp = newLevel > tracker.level;
 
-      const newStreak = tracker.currentStreak + 1;
+      updates.totalXP = newTotalXP;
+      updates.level = newLevel;
+      updates.totalCompletions = tracker.totalCompletions + 1;
+      updates.currentStreak = newStreak;
+      updates.bestStreak = Math.max(tracker.bestStreak, newStreak);
+      updates.lastCompletedAt = now;
+      updates.lastOccurrenceDate = occurrenceDate;
+      updates.currentValue = 0; // Reset for next occurrence
+      updates.successfulPeriods = tracker.successfulPeriods + 1;
+      updates.totalPeriods = tracker.totalPeriods + 1;
+    }
 
-      await tracker.update({
-        totalXP: newTotalXP,
-        level: newLevel,
-        totalCompletions: tracker.totalCompletions + 1,
-        currentStreak: newStreak,
-        bestStreak: Math.max(tracker.bestStreak, newStreak),
-        lastCompletedAt: now,
-      });
+    await tracker.update(updates);
 
-      // Sync: Mark the first pending tracker task as completed
-      const pendingTask = await Task.findOne({
-        where: {
-          trackerId: tracker.id,
-          status: { [Op.in]: ['pending', 'in_progress'] },
-        },
-        order: [['dueDate', 'ASC']],
-      });
+    // If goal completed and there's a pending task, mark it complete
+    let completedTask = null;
+    if (goalCompleted && pendingTask) {
+      await pendingTask.update({ status: 'completed' });
+      completedTask = pendingTask;
+      console.log(`Marked task "${pendingTask.title}" as completed`);
 
-      if (pendingTask) {
-        await pendingTask.update({ status: 'completed' });
-        completedTask = pendingTask;
-        console.log(`Synced: Marked task "${pendingTask.title}" as completed along with tracker`);
+      // Create next occurrence task
+      if (tracker.generateTasks) {
+        try {
+          await createNextTrackerTask(req.models, tracker, pendingTask);
+        } catch (err) {
+          console.error('Error creating next task:', err);
+        }
       }
     }
 
@@ -472,6 +532,8 @@ router.post('/:id/log', async (req, res) => {
     data.xpEarned = xpEarned;
     data.leveledUp = leveledUp;
     data.goalCompleted = goalCompleted;
+    data.streakBroken = streakBroken;
+
     if (completedTask) {
       data.completedTask = {
         id: completedTask.id,
@@ -487,7 +549,7 @@ router.post('/:id/log', async (req, res) => {
 });
 
 // ============================================================
-// POST /api/trackers/:id/reset - Reset current period
+// POST /api/trackers/:id/reset - Reset current occurrence
 // ============================================================
 router.post('/:id/reset', async (req, res) => {
   try {
@@ -501,7 +563,6 @@ router.post('/:id/reset', async (req, res) => {
 
     await tracker.update({
       currentValue: 0,
-      periodStartDate: new Date(),
       lastCompletedAt: null,
     });
 
@@ -525,8 +586,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Tracker not found' });
     }
 
-    // First, unlink all tasks associated with this tracker
-    // This prevents foreign key constraint errors
+    // Unlink all tasks
     await Task.update(
       { trackerId: null },
       { where: { trackerId: tracker.id } }
@@ -541,7 +601,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // ============================================================
-// POST /api/trackers/:id/generate-task - Generate task for specific tracker
+// POST /api/trackers/:id/generate-task - Force generate task
 // ============================================================
 router.post('/:id/generate-task', async (req, res) => {
   try {
@@ -561,8 +621,13 @@ router.post('/:id/generate-task', async (req, res) => {
       return res.status(400).json({ error: 'Tracker is paused' });
     }
 
-    // Force task generation even if generateTasks is false
-    const task = await createTrackerTask(req.models, tracker);
+    // Get next occurrence and create task
+    const occurrences = getNextScheduledOccurrences(tracker, new Date(), 1);
+    if (occurrences.length === 0) {
+      return res.status(400).json({ error: 'No upcoming occurrences found' });
+    }
+
+    const task = await createTrackerTask(req.models, tracker, occurrences[0]);
 
     res.status(201).json({
       message: 'Task generated successfully',

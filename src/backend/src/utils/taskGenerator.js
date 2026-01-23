@@ -1,14 +1,17 @@
 /**
- * Project Alpine - Task Generator Utility
+ * Project Alpine - Task Generator Utility (Occurrence-Based)
  *
- * Utility functions for automatic task generation from trackers.
- * Handles creation of the "tracked" tag and generating tasks based on tracker schedules.
+ * Generates tasks for trackers based on their scheduled occurrences.
+ * Each scheduled time is treated as an independent occurrence:
+ * - Weekly with Mon/Wed/Fri creates 3 separate tasks
+ * - Daily creates one task per day
+ * - Monthly with 1st/15th creates 2 tasks per month
  *
  * All functions accept a models object for per-user database isolation.
  */
 
 const { Op } = require('sequelize');
-const { FREQUENCIES, XP_REWARDS, ACHIEVEMENTS } = require('../models');
+const { XP_REWARDS } = require('../models');
 
 // Constants
 const TRACKED_TAG_NAME = 'tracked';
@@ -39,204 +42,280 @@ async function ensureTrackedTag(models) {
 }
 
 /**
- * Calculates the due date for a task based on the tracker's frequency.
- * @param {string} frequency - The tracker frequency (hourly, daily, weekly, monthly)
- * @param {Date} startDate - The starting date (defaults to now)
- * @returns {Date} The calculated due date
+ * Parses a time string (e.g., "09:00") and returns hours and minutes.
+ * @param {string} timeStr - Time string in "HH:MM" format
+ * @returns {{hours: number, minutes: number}} Parsed hours and minutes
  */
-function calculateDueDate(frequency, startDate = new Date()) {
-  const dueDate = new Date(startDate);
-
-  switch (frequency) {
-    case 'hourly':
-      // Due at the end of the current hour
-      dueDate.setMinutes(59, 59, 999);
-      break;
-    case 'daily':
-      // Due at end of day (11:59 PM)
-      dueDate.setHours(23, 59, 59, 999);
-      break;
-    case 'weekly':
-      // Due at end of the week (Sunday 11:59 PM)
-      const daysUntilSunday = 7 - dueDate.getDay();
-      dueDate.setDate(dueDate.getDate() + daysUntilSunday);
-      dueDate.setHours(23, 59, 59, 999);
-      break;
-    case 'monthly':
-      // Due at end of the month
-      dueDate.setMonth(dueDate.getMonth() + 1, 0);
-      dueDate.setHours(23, 59, 59, 999);
-      break;
-    default:
-      // Default to end of day
-      dueDate.setHours(23, 59, 59, 999);
+function parseScheduledTime(timeStr) {
+  if (!timeStr) {
+    return { hours: 9, minutes: 0 }; // Default to 9:00 AM
   }
-
-  return dueDate;
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  return {
+    hours: isNaN(hours) ? 9 : hours,
+    minutes: isNaN(minutes) ? 0 : minutes,
+  };
 }
 
 /**
- * Calculates the initial due date for a tracker respecting scheduling fields.
- * If today is a scheduled day, returns today at scheduledTime.
- * If today is not a scheduled day, returns the next scheduled occurrence.
- * @param {Tracker} tracker - The tracker with scheduling information
- * @returns {Date} The calculated due date
+ * Gets the name of a day from its number (0-6)
  */
-function calculateInitialScheduledDueDate(tracker) {
-  const now = new Date();
+function getDayName(dayNum) {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return days[dayNum] || 'Unknown';
+}
+
+/**
+ * Gets the next N scheduled occurrences for a tracker.
+ * This is the core function for occurrence-based scheduling.
+ *
+ * @param {Tracker} tracker - The tracker with scheduling information
+ * @param {Date} fromDate - Start date to calculate from (defaults to now)
+ * @param {number} count - Number of occurrences to return (default 7)
+ * @returns {Date[]} Array of occurrence dates
+ */
+function getNextScheduledOccurrences(tracker, fromDate = new Date(), count = 7) {
+  const occurrences = [];
   const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+  const now = new Date(fromDate);
 
   switch (tracker.frequency) {
-    case 'hourly':
-      // For hourly, just set the scheduled minutes
-      const hourlyDate = new Date(now);
-      hourlyDate.setMinutes(minutes, 0, 0);
-      // If we're past that minute, move to next hour
-      if (hourlyDate <= now) {
-        hourlyDate.setHours(hourlyDate.getHours() + 1);
+    case 'hourly': {
+      // Each hour is an occurrence
+      const startHour = new Date(now);
+      startHour.setMinutes(minutes, 0, 0);
+      if (startHour <= now) {
+        startHour.setHours(startHour.getHours() + 1);
       }
-      return hourlyDate;
+      for (let i = 0; i < count; i++) {
+        const occurrence = new Date(startHour);
+        occurrence.setHours(occurrence.getHours() + i);
+        occurrences.push(occurrence);
+      }
+      break;
+    }
 
-    case 'daily':
-      // For daily, set the scheduled time
-      // Use explicit date construction to avoid timezone issues
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+    case 'daily': {
+      // Each day at scheduled time
+      const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      // If today's occurrence has passed, start from tomorrow
+      if (startDay <= now) {
+        startDay.setDate(startDay.getDate() + 1);
+      }
+      // But include today if the time hasn't passed yet
+      const todayOccurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      if (todayOccurrence > now) {
+        occurrences.push(todayOccurrence);
+      }
+      // Add future days
+      for (let i = 0; occurrences.length < count; i++) {
+        const occurrence = new Date(startDay);
+        occurrence.setDate(occurrence.getDate() + i);
+        if (!occurrences.some(d => d.getTime() === occurrence.getTime())) {
+          occurrences.push(occurrence);
+        }
+      }
+      break;
+    }
 
-    case 'weekly':
-      // Check if today is one of the scheduled days
+    case 'weekly': {
+      // Each scheduled day of the week
       const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
         ? tracker.scheduledDays.sort((a, b) => a - b)
-        : [now.getDay()]; // Default to current day
+        : [0]; // Default to Sunday if no days specified
 
-      const currentDay = now.getDay();
-      const isTodayScheduled = scheduledDays.includes(currentDay);
+      let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let addedCount = 0;
+      const maxIterations = count * 7 + 14; // Safety limit
+      let iterations = 0;
 
-      if (isTodayScheduled) {
-        // Today is a scheduled day - due today at scheduled time
-        // Use explicit date construction to avoid timezone issues
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-      } else {
-        // Find next scheduled day
-        let daysToAdd = 0;
-        let foundNextDay = false;
-        for (const day of scheduledDays) {
-          if (day > currentDay) {
-            daysToAdd = day - currentDay;
-            foundNextDay = true;
-            break;
-          }
-        }
-        if (!foundNextDay) {
-          // Wrap to next week
-          daysToAdd = 7 - currentDay + scheduledDays[0];
-        }
-        const targetDate = new Date(now);
-        targetDate.setDate(now.getDate() + daysToAdd);
-        // Use explicit date construction to avoid timezone issues
-        return new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), hours, minutes, 0, 0);
-      }
+      while (addedCount < count && iterations < maxIterations) {
+        iterations++;
+        const dayOfWeek = currentDate.getDay();
 
-    case 'monthly':
-      // Check if today is one of the scheduled dates
-      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
-        ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
-        : [now.getDate()]; // Default to current date
-
-      const currentDate = now.getDate();
-      const isTodayScheduledDate = scheduledDates.includes(currentDate);
-
-      if (isTodayScheduledDate) {
-        // Today is a scheduled date - due today at scheduled time
-        // Use explicit date construction to avoid timezone issues
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-      } else {
-        // Find next scheduled date
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-
-        // Check for next date in current month
-        for (const date of scheduledDates) {
-          if (date > currentDate) {
-            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-            if (date <= daysInMonth) {
-              const nextDate = new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
-              return nextDate;
+        if (scheduledDays.includes(dayOfWeek)) {
+          const occurrence = new Date(
+            currentDate.getFullYear(),
+            currentDate.getMonth(),
+            currentDate.getDate(),
+            hours,
+            minutes,
+            0,
+            0
+          );
+          // Only add if it's in the future (or today's occurrence hasn't passed)
+          if (occurrence > now || (occurrence.toDateString() === now.toDateString() && occurrence > now)) {
+            occurrences.push(occurrence);
+            addedCount++;
+          } else if (occurrence.toDateString() === now.toDateString()) {
+            // Today's occurrence - add if time hasn't passed
+            const todayCheck = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+            if (todayCheck > now) {
+              occurrences.push(todayCheck);
+              addedCount++;
             }
           }
         }
 
-        // Go to next month
-        const nextMonth = currentMonth + 1;
-        const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
-        const actualNextMonth = nextMonth % 12;
-        const daysInNextMonth = new Date(nextYear, actualNextMonth + 1, 0).getDate();
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+      break;
+    }
+
+    case 'monthly': {
+      // Each scheduled date of the month
+      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
+        ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
+        : [1]; // Default to 1st if no dates specified
+
+      let currentMonth = now.getMonth();
+      let currentYear = now.getFullYear();
+      let addedCount = 0;
+      const maxMonths = Math.ceil(count / scheduledDates.length) + 2;
+
+      for (let monthOffset = 0; monthOffset < maxMonths && addedCount < count; monthOffset++) {
+        const month = (currentMonth + monthOffset) % 12;
+        const year = currentYear + Math.floor((currentMonth + monthOffset) / 12);
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
 
         for (const date of scheduledDates) {
-          if (date <= daysInNextMonth) {
-            return new Date(nextYear, actualNextMonth, date, hours, minutes, 0, 0);
+          if (date > daysInMonth) continue; // Skip invalid dates
+
+          const occurrence = new Date(year, month, date, hours, minutes, 0, 0);
+
+          // Only add future occurrences
+          if (occurrence > now) {
+            occurrences.push(occurrence);
+            addedCount++;
+            if (addedCount >= count) break;
           }
         }
+      }
+      break;
+    }
 
-        // Fallback to first day of next month
-        return new Date(nextYear, actualNextMonth, 1, hours, minutes, 0, 0);
+    default: {
+      // Fallback: daily
+      const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      if (startDay <= now) {
+        startDay.setDate(startDay.getDate() + 1);
+      }
+      for (let i = 0; i < count; i++) {
+        const occurrence = new Date(startDay);
+        occurrence.setDate(occurrence.getDate() + i);
+        occurrences.push(occurrence);
+      }
+    }
+  }
+
+  return occurrences.slice(0, count);
+}
+
+/**
+ * Gets the previous scheduled occurrence before a given date.
+ * Used for streak tracking - to check if the previous occurrence was completed.
+ *
+ * @param {Tracker} tracker - The tracker with scheduling information
+ * @param {Date} beforeDate - Find the occurrence before this date
+ * @returns {Date|null} The previous occurrence date, or null if none
+ */
+function getPreviousScheduledOccurrence(tracker, beforeDate = new Date()) {
+  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+  const now = new Date(beforeDate);
+
+  switch (tracker.frequency) {
+    case 'hourly': {
+      const prevHour = new Date(now);
+      prevHour.setMinutes(minutes, 0, 0);
+      if (prevHour >= now) {
+        prevHour.setHours(prevHour.getHours() - 1);
+      }
+      return prevHour;
+    }
+
+    case 'daily': {
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      return new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), hours, minutes, 0, 0);
+    }
+
+    case 'weekly': {
+      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
+        ? tracker.scheduledDays.sort((a, b) => a - b)
+        : [0];
+
+      let checkDate = new Date(now);
+      checkDate.setDate(checkDate.getDate() - 1); // Start from yesterday
+
+      for (let i = 0; i < 14; i++) { // Check up to 2 weeks back
+        if (scheduledDays.includes(checkDate.getDay())) {
+          return new Date(
+            checkDate.getFullYear(),
+            checkDate.getMonth(),
+            checkDate.getDate(),
+            hours,
+            minutes,
+            0,
+            0
+          );
+        }
+        checkDate.setDate(checkDate.getDate() - 1);
+      }
+      return null;
+    }
+
+    case 'monthly': {
+      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
+        ? tracker.scheduledDatesOfMonth.sort((a, b) => b - a) // Descending for finding previous
+        : [1];
+
+      let checkMonth = now.getMonth();
+      let checkYear = now.getFullYear();
+      const todayDate = now.getDate();
+
+      // Check current month first
+      for (const date of scheduledDates) {
+        if (date < todayDate) {
+          return new Date(checkYear, checkMonth, date, hours, minutes, 0, 0);
+        }
       }
 
+      // Check previous month
+      checkMonth--;
+      if (checkMonth < 0) {
+        checkMonth = 11;
+        checkYear--;
+      }
+      const daysInPrevMonth = new Date(checkYear, checkMonth + 1, 0).getDate();
+      for (const date of scheduledDates) {
+        if (date <= daysInPrevMonth) {
+          return new Date(checkYear, checkMonth, date, hours, minutes, 0, 0);
+        }
+      }
+      return null;
+    }
+
     default:
-      // Default to today at scheduled time
-      // Use explicit date construction to avoid timezone issues
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      return null;
   }
 }
 
 /**
- * Creates a task for a tracker with the "tracked" tag attached.
- * Uses scheduling fields (scheduledTime, scheduledDays, scheduledDatesOfMonth) when set.
+ * Creates a task for a specific occurrence of a tracker.
+ *
  * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to create a task for
- * @param {Object} options - Additional options
- * @param {Date} options.dueDate - Optional custom due date
- * @param {string} options.urgency - Optional urgency level (defaults to 'medium')
+ * @param {Date} dueDate - The specific occurrence date/time
  * @returns {Promise<Task>} The created task with tags
  */
-async function createTrackerTask(models, tracker, options = {}) {
+async function createTrackerTask(models, tracker, dueDate) {
   const { Task, Tag, Category } = models;
 
   // Ensure the tracked tag exists
   const trackedTag = await ensureTrackedTag(models);
 
-  // Calculate due date - use scheduling-aware calculation if scheduling fields are set
-  let dueDate = options.dueDate;
-  if (!dueDate) {
-    const hasScheduling = tracker.scheduledTime ||
-      (tracker.scheduledDays && tracker.scheduledDays.length > 0) ||
-      (tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0);
-
-    if (hasScheduling) {
-      // Use scheduling-aware due date calculation
-      dueDate = calculateInitialScheduledDueDate(tracker);
-    } else {
-      // Fallback to simple end-of-period calculation
-      dueDate = calculateDueDate(tracker.frequency);
-    }
-  }
-
-  // Determine urgency based on frequency if not provided
-  let urgency = options.urgency || 'medium';
-  if (!options.urgency) {
-    // Higher frequency = higher urgency
-    switch (tracker.frequency) {
-      case 'hourly':
-        urgency = 'high';
-        break;
-      case 'daily':
-        urgency = 'medium';
-        break;
-      case 'weekly':
-      case 'monthly':
-        urgency = 'low';
-        break;
-    }
-  }
+  // Use tracker's configured urgency or default
+  const urgency = tracker.taskUrgency || 'medium';
 
   // Create the task
   const task = await Task.create({
@@ -265,12 +344,56 @@ async function createTrackerTask(models, tracker, options = {}) {
 }
 
 /**
- * Generates tasks for all active trackers that have generateTasks enabled.
- * - Archives stale pending tasks from previous periods
- * - Creates ONE task for the current period if none exists
- * - For weekly/monthly trackers, only creates on scheduled days
+ * Archives stale tasks (past due date, not completed).
+ * Occurrence-based: archives any pending task where dueDate < now.
+ *
  * @param {Object} models - User-specific models
- * @returns {Promise<{created: Task[], skipped: number, archived: number}>} Results of the generation
+ * @param {Tracker} tracker - The tracker to clean up
+ * @returns {Promise<number>} Number of tasks archived
+ */
+async function archiveStaleTasks(models, tracker) {
+  const { Task } = models;
+  const now = new Date();
+
+  // For hourly, use current hour as cutoff
+  // For daily/weekly/monthly, use start of today
+  let cutoffDate;
+  if (tracker.frequency === 'hourly') {
+    cutoffDate = new Date(now);
+    cutoffDate.setMinutes(0, 0, 0);
+  } else {
+    // Start of today - tasks due before today are stale
+    cutoffDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  }
+
+  // Find pending/in_progress tasks with due date before cutoff
+  const staleTasks = await Task.findAll({
+    where: {
+      trackerId: tracker.id,
+      status: { [Op.in]: ['pending', 'in_progress'] },
+      dueDate: { [Op.lt]: cutoffDate },
+    },
+  });
+
+  if (staleTasks.length === 0) {
+    return 0;
+  }
+
+  // Archive them
+  for (const task of staleTasks) {
+    await task.update({ status: 'archived' });
+    console.log(`Archived stale task "${task.title}" (was due ${task.dueDate.toISOString()})`);
+  }
+
+  return staleTasks.length;
+}
+
+/**
+ * Generates tasks for all upcoming scheduled occurrences.
+ * This is the main task generation function - called on every task list fetch.
+ *
+ * @param {Object} models - User-specific models
+ * @returns {Promise<{created: Task[], skipped: number, archived: number}>} Results
  */
 async function generateRecurringTasks(models) {
   const { Task, Tracker } = models;
@@ -296,34 +419,54 @@ async function generateRecurringTasks(models) {
       return results;
     }
 
-    // Ensure tracked tag exists
-    const trackedTag = await ensureTrackedTag(models);
-
     for (const tracker of trackers) {
       try {
-        // Step 1: Archive any stale pending tasks from PREVIOUS periods
+        // Step 1: Archive any stale tasks
         const archivedCount = await archiveStaleTasks(models, tracker);
         results.archived += archivedCount;
 
-        // Step 2: Check if today is a scheduled day (for weekly/monthly)
-        if (!isTodayScheduled(tracker)) {
-          results.skipped++;
-          continue;
+        // Step 2: Get next scheduled occurrences (7 for weekly/monthly, 3 for daily/hourly)
+        const occurrenceCount = (tracker.frequency === 'weekly' || tracker.frequency === 'monthly') ? 7 : 3;
+        const occurrences = getNextScheduledOccurrences(tracker, new Date(), occurrenceCount);
+
+        // Step 3: For each occurrence, check if a task exists
+        for (const occurrence of occurrences) {
+          // Check if a task already exists for this exact due date
+          const existingTask = await Task.findOne({
+            where: {
+              trackerId: tracker.id,
+              status: { [Op.in]: ['pending', 'in_progress'] },
+              dueDate: occurrence,
+            },
+          });
+
+          if (existingTask) {
+            results.skipped++;
+            continue;
+          }
+
+          // Also check for tasks within a small time window (to handle timezone drift)
+          const windowStart = new Date(occurrence.getTime() - 60000); // 1 min before
+          const windowEnd = new Date(occurrence.getTime() + 60000);   // 1 min after
+          const nearbyTask = await Task.findOne({
+            where: {
+              trackerId: tracker.id,
+              status: { [Op.in]: ['pending', 'in_progress'] },
+              dueDate: { [Op.between]: [windowStart, windowEnd] },
+            },
+          });
+
+          if (nearbyTask) {
+            results.skipped++;
+            continue;
+          }
+
+          // Create task for this occurrence
+          const task = await createTrackerTask(models, tracker, occurrence);
+          results.created.push(task);
         }
-
-        // Step 3: Check if there's already an active task for this tracker in current period
-        const existingTask = await findActiveTrackerTask(models, tracker, trackedTag.id);
-
-        if (existingTask) {
-          results.skipped++;
-          continue;
-        }
-
-        // Step 4: Create a new task for the current period
-        const task = await createTrackerTask(models, tracker);
-        results.created.push(task);
       } catch (error) {
-        console.error(`Error generating task for tracker ${tracker.id}:`, error);
+        console.error(`Error generating tasks for tracker ${tracker.id}:`, error);
         results.errors.push({ trackerId: tracker.id, error: error.message });
       }
     }
@@ -339,721 +482,158 @@ async function generateRecurringTasks(models) {
 }
 
 /**
- * Archives pending tasks from previous periods for a tracker.
- * This prevents old tasks from cluttering the calendar.
+ * Creates tasks for all scheduled occurrences when a tracker is first created.
+ * Called once during tracker creation.
+ *
  * @param {Object} models - User-specific models
- * @param {Tracker} tracker - The tracker to clean up
- * @returns {Promise<number>} Number of tasks archived
- */
-async function archiveStaleTasks(models, tracker) {
-  const { Task } = models;
-  const periodStart = getPeriodStartDate(tracker.frequency);
-
-  // Find pending tasks from BEFORE the current period
-  const staleTasks = await Task.findAll({
-    where: {
-      trackerId: tracker.id,
-      status: { [Op.in]: ['pending', 'in_progress'] },
-      dueDate: { [Op.lt]: periodStart },
-    },
-  });
-
-  if (staleTasks.length === 0) {
-    return 0;
-  }
-
-  // Archive them
-  for (const task of staleTasks) {
-    await task.update({ status: 'archived' });
-    console.log(`Archived stale task "${task.title}" (was due ${task.dueDate.toISOString()})`);
-  }
-
-  return staleTasks.length;
-}
-
-/**
- * Checks if today is a scheduled day for the tracker.
- * For daily trackers: always true
- * For weekly trackers: checks if today's day of week is in scheduledDays
- * For monthly trackers: checks if today's date is in scheduledDatesOfMonth
- * @param {Tracker} tracker - The tracker to check
- * @returns {boolean} Whether today is a scheduled day
- */
-function isTodayScheduled(tracker) {
-  const now = new Date();
-
-  switch (tracker.frequency) {
-    case 'hourly':
-    case 'daily':
-      // Daily and hourly are always scheduled
-      return true;
-
-    case 'weekly':
-      // Check if today's day of week is in scheduledDays
-      const scheduledDays = tracker.scheduledDays;
-      if (!scheduledDays || scheduledDays.length === 0) {
-        return true; // No specific days = every day
-      }
-      return scheduledDays.includes(now.getDay());
-
-    case 'monthly':
-      // Check if today's date is in scheduledDatesOfMonth
-      const scheduledDates = tracker.scheduledDatesOfMonth;
-      if (!scheduledDates || scheduledDates.length === 0) {
-        return true; // No specific dates = every day
-      }
-      return scheduledDates.includes(now.getDate());
-
-    default:
-      return true;
-  }
-}
-
-/**
- * Finds an existing active (pending/in_progress) task for a tracker.
- * Uses trackerId for reliable matching.
- * @param {Object} models - User-specific models
- * @param {Tracker} tracker - The tracker to find tasks for
- * @param {number} trackedTagId - The ID of the tracked tag (unused, kept for compatibility)
- * @returns {Promise<Task|null>} The existing task or null
- */
-async function findActiveTrackerTask(models, tracker, trackedTagId) {
-  const { Task } = models;
-
-  // Calculate the period start date based on frequency
-  const periodStart = getPeriodStartDate(tracker.frequency);
-
-  // Find tasks that:
-  // 1. Belong to this tracker (by trackerId)
-  // 2. Are pending or in_progress
-  // 3. Have a due date within the current period
-  const task = await Task.findOne({
-    where: {
-      trackerId: tracker.id,
-      status: { [Op.in]: ['pending', 'in_progress'] },
-      dueDate: { [Op.gte]: periodStart },
-    },
-    order: [['dueDate', 'ASC']],
-  });
-
-  return task;
-}
-
-/**
- * Gets the start date of the current period based on frequency.
- * @param {string} frequency - The frequency (hourly, daily, weekly, monthly)
- * @returns {Date} The start of the current period
- */
-function getPeriodStartDate(frequency) {
-  const now = new Date();
-
-  switch (frequency) {
-    case 'hourly':
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0);
-    case 'daily':
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    case 'weekly':
-      const dayOfWeek = now.getDay();
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - dayOfWeek);
-      weekStart.setHours(0, 0, 0, 0);
-      return weekStart;
-    case 'monthly':
-      return new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    default:
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  }
-}
-
-/**
- * Parses a time string (e.g., "09:00") and returns hours and minutes.
- * @param {string} timeStr - Time string in "HH:MM" format
- * @returns {{hours: number, minutes: number}} Parsed hours and minutes
- */
-function parseScheduledTime(timeStr) {
-  if (!timeStr) {
-    return { hours: 9, minutes: 0 }; // Default to 9:00 AM
-  }
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  return {
-    hours: isNaN(hours) ? 9 : hours,
-    minutes: isNaN(minutes) ? 0 : minutes,
-  };
-}
-
-/**
- * Calculates the next due date based on the tracker's schedule.
- * Respects scheduledTime, scheduledDays (for weekly), and scheduledDatesOfMonth (for monthly).
- * @param {Tracker} tracker - The tracker with schedule information
- * @param {Date} fromDate - The starting date to calculate from (defaults to now)
- * @returns {Date} The next due date
- */
-function calculateNextDueDate(tracker, fromDate = new Date()) {
-  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-  const baseDate = new Date(fromDate);
-
-  switch (tracker.frequency) {
-    case 'hourly':
-      // Next hour at scheduled minutes (or top of hour)
-      baseDate.setHours(baseDate.getHours() + 1);
-      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), baseDate.getHours(), minutes, 0, 0);
-
-    case 'daily':
-      // Next day at scheduled time
-      baseDate.setDate(baseDate.getDate() + 1);
-      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
-
-    case 'weekly':
-      // Check if specific days are scheduled
-      if (tracker.scheduledDays && tracker.scheduledDays.length > 0) {
-        // Find next scheduled day of week
-        const scheduledDays = tracker.scheduledDays.sort((a, b) => a - b);
-        const currentDay = baseDate.getDay();
-        let daysToAdd = 0;
-
-        // Find the next scheduled day
-        let foundNextDay = false;
-        for (const day of scheduledDays) {
-          if (day > currentDay) {
-            daysToAdd = day - currentDay;
-            foundNextDay = true;
-            break;
-          }
-        }
-
-        // If no day found this week, wrap to first scheduled day next week
-        if (!foundNextDay) {
-          daysToAdd = 7 - currentDay + scheduledDays[0];
-        }
-
-        baseDate.setDate(baseDate.getDate() + daysToAdd);
-        return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
-      } else {
-        // No specific days - default to end of NEXT week (Sunday)
-        const currentDay = baseDate.getDay();
-        const daysUntilNextSunday = currentDay === 0 ? 7 : 14 - currentDay; // Next week's Sunday
-        baseDate.setDate(baseDate.getDate() + daysUntilNextSunday);
-        return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 0);
-      }
-
-    case 'monthly':
-      // Check if specific dates are scheduled
-      if (tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0) {
-        // Find next scheduled date of month
-        const scheduledDates = tracker.scheduledDatesOfMonth.sort((a, b) => a - b);
-        const currentDate = baseDate.getDate();
-        const currentMonth = baseDate.getMonth();
-        const currentYear = baseDate.getFullYear();
-
-        // Check for next scheduled date in current month
-        for (const date of scheduledDates) {
-          if (date > currentDate) {
-            // Ensure the date is valid for the current month
-            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-            if (date <= daysInMonth) {
-              return new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
-            }
-          }
-        }
-
-        // If no date found this month, go to first scheduled date next month
-        const nextMonth = currentMonth + 1;
-        const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
-        const actualNextMonth = nextMonth % 12;
-        const daysInNextMonth = new Date(nextYear, actualNextMonth + 1, 0).getDate();
-
-        // Find first valid scheduled date in next month
-        for (const date of scheduledDates) {
-          if (date <= daysInNextMonth) {
-            return new Date(nextYear, actualNextMonth, date, hours, minutes, 0, 0);
-          }
-        }
-
-        // Fallback to 1st if no valid date found
-        return new Date(nextYear, actualNextMonth, 1, hours, minutes, 0, 0);
-      } else {
-        // No specific dates - default to end of NEXT month
-        const nextMonth = baseDate.getMonth() + 1;
-        const nextYear = nextMonth > 11 ? baseDate.getFullYear() + 1 : baseDate.getFullYear();
-        const actualNextMonth = nextMonth % 12;
-        const lastDayOfNextMonth = new Date(nextYear, actualNextMonth + 1, 0).getDate();
-        return new Date(nextYear, actualNextMonth, lastDayOfNextMonth, 23, 59, 59, 0);
-      }
-
-    default:
-      // Default to next day at scheduled time
-      baseDate.setDate(baseDate.getDate() + 1);
-      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes, 0, 0);
-  }
-}
-
-/**
- * Creates the next occurrence of a tracker task after one is completed.
- * Uses the tracker's schedule to determine the next due date.
- * IMPORTANT: Only creates if no pending task already exists for the next period.
- * @param {Object} models - User-specific models
- * @param {Tracker} tracker - The tracker to create the next task for
- * @param {Task} completedTask - The task that was just completed (for reference)
- * @returns {Promise<Task|null>} The newly created task, or null if one already exists
- */
-async function createNextTrackerTask(models, tracker, completedTask) {
-  const { Task, Tag, Category } = models;
-
-  // Calculate the next due date based on the tracker's schedule
-  const nextDueDate = calculateNextDueDate(tracker);
-
-  // Check if there's already a pending task for this tracker with a future due date
-  const existingTask = await Task.findOne({
-    where: {
-      trackerId: tracker.id,
-      status: { [Op.in]: ['pending', 'in_progress'] },
-      dueDate: { [Op.gte]: new Date() }, // Future or current tasks
-    },
-    order: [['dueDate', 'ASC']],
-  });
-
-  if (existingTask) {
-    console.log(`Skipping task creation - pending task already exists for tracker "${tracker.name}" (task #${existingTask.id})`);
-    return null;
-  }
-
-  // Ensure the tracked tag exists
-  const trackedTag = await ensureTrackedTag(models);
-
-  // Use tracker's configured urgency or default to medium
-  const urgency = tracker.taskUrgency || 'medium';
-
-  // Create the task
-  const task = await Task.create({
-    title: tracker.name,
-    description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
-    dueDate: nextDueDate,
-    urgency,
-    categoryId: tracker.taskCategoryId || null,
-    trackerId: tracker.id,
-  });
-
-  // Attach the tracked tag
-  await task.setTags([trackedTag]);
-
-  // Return task with associations
-  const completeTask = await Task.findByPk(task.id, {
-    include: [
-      { model: Category, as: 'category' },
-      { model: Tag, as: 'tags' },
-    ],
-  });
-
-  console.log(`Created next task "${task.title}" for tracker ${tracker.id} with due date ${nextDueDate.toISOString()}`);
-
-  return completeTask;
-}
-
-/**
- * Creates tasks for ALL scheduled occurrences in the current week/month.
- * For weekly trackers with Mon/Wed/Fri, this creates 3 tasks.
- * For monthly trackers with specific dates, creates tasks for all those dates.
- * @param {Object} models - User-specific models
- * @param {Tracker} tracker - The tracker to create tasks for
+ * @param {Tracker} tracker - The newly created tracker
  * @returns {Promise<Task[]>} Array of created tasks
  */
 async function createAllScheduledTasks(models, tracker) {
-  const { Task, Tag, Category } = models;
+  const occurrenceCount = (tracker.frequency === 'weekly' || tracker.frequency === 'monthly') ? 7 : 3;
+  const occurrences = getNextScheduledOccurrences(tracker, new Date(), occurrenceCount);
 
   const tasks = [];
-  const trackedTag = await ensureTrackedTag(models);
-  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-  const now = new Date();
-
-  // Use tracker's configured urgency or default to medium
-  const urgency = tracker.taskUrgency || 'medium';
-
-  if (tracker.frequency === 'weekly' && tracker.scheduledDays && tracker.scheduledDays.length > 0) {
-    // For weekly trackers, create tasks for all scheduled days in current and next week
-    const scheduledDays = tracker.scheduledDays.sort((a, b) => a - b);
-    const currentDay = now.getDay();
-
-    for (const day of scheduledDays) {
-      let daysToAdd = day - currentDay;
-      if (daysToAdd < 0) {
-        // Day already passed this week, schedule for next week
-        daysToAdd += 7;
-      }
-
-      // Calculate the target date first
-      const targetDate = new Date(now);
-      targetDate.setDate(now.getDate() + daysToAdd);
-
-      // Create the due date with explicit components to avoid timezone issues
-      const dueDate = new Date(
-        targetDate.getFullYear(),
-        targetDate.getMonth(),
-        targetDate.getDate(),
-        hours,
-        minutes,
-        0,
-        0
-      );
-
-      // Create the task
-      const task = await Task.create({
-        title: tracker.name,
-        description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
-        dueDate,
-        urgency,
-        categoryId: tracker.taskCategoryId || null,
-        trackerId: tracker.id,
-      });
-
-      // Attach the tracked tag
-      await task.setTags([trackedTag]);
-
-      // Fetch complete task with associations
-      const completeTask = await Task.findByPk(task.id, {
-        include: [
-          { model: Category, as: 'category' },
-          { model: Tag, as: 'tags' },
-        ],
-      });
-
-      tasks.push(completeTask);
-      console.log(`Created task "${task.title}" for ${getDayName(day)} (${dueDate.toISOString()})`);
-    }
-  } else if (tracker.frequency === 'monthly' && tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0) {
-    // For monthly trackers, create tasks for all scheduled dates in current month
-    const scheduledDates = tracker.scheduledDatesOfMonth.sort((a, b) => a - b);
-    const currentDate = now.getDate();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-
-    for (const date of scheduledDates) {
-      if (date > daysInMonth) continue; // Skip invalid dates for this month
-
-      const dueDate = new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
-
-      // Skip dates in the past
-      if (dueDate < now) continue;
-
-      // Create the task
-      const task = await Task.create({
-        title: tracker.name,
-        description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
-        dueDate,
-        urgency,
-        categoryId: tracker.taskCategoryId || null,
-        trackerId: tracker.id,
-      });
-
-      // Attach the tracked tag
-      await task.setTags([trackedTag]);
-
-      // Fetch complete task with associations
-      const completeTask = await Task.findByPk(task.id, {
-        include: [
-          { model: Category, as: 'category' },
-          { model: Tag, as: 'tags' },
-        ],
-      });
-
-      tasks.push(completeTask);
-      console.log(`Created task "${task.title}" for ${date}/${currentMonth + 1} (${dueDate.toISOString()})`);
-    }
-  } else if (tracker.frequency === 'weekly') {
-    // Weekly frequency with no specific days - default to end of week (Sunday)
-    // Task can be completed anytime during the week
-    const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-
-    // Calculate end of current week (Sunday)
-    const currentDay = now.getDay();
-    const daysUntilSunday = currentDay === 0 ? 0 : 7 - currentDay;
-
-    const targetDate = new Date(now);
-    targetDate.setDate(now.getDate() + daysUntilSunday);
-    const dueDate = new Date(
-      targetDate.getFullYear(),
-      targetDate.getMonth(),
-      targetDate.getDate(),
-      23, 59, 59, 0 // End of day
-    );
-
-    const task = await Task.create({
-      title: tracker.name,
-      description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
-      dueDate,
-      urgency: tracker.taskUrgency || 'medium',
-      categoryId: tracker.taskCategoryId || null,
-      trackerId: tracker.id,
-    });
-
-    await task.setTags([trackedTag]);
-
-    const completeTask = await Task.findByPk(task.id, {
-      include: [
-        { model: Category, as: 'category' },
-        { model: Tag, as: 'tags' },
-      ],
-    });
-
-    tasks.push(completeTask);
-    console.log(`Created task "${task.title}" for end of week (${dueDate.toISOString()})`);
-  } else if (tracker.frequency === 'monthly') {
-    // Monthly frequency with no specific dates - default to end of month
-    // Task can be completed anytime during the month
-    const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-
-    // Calculate end of current month
-    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const dueDate = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      lastDayOfMonth,
-      23, 59, 59, 0 // End of day
-    );
-
-    const task = await Task.create({
-      title: tracker.name,
-      description: tracker.description || `Auto-generated task for tracker: ${tracker.name}`,
-      dueDate,
-      urgency: tracker.taskUrgency || 'medium',
-      categoryId: tracker.taskCategoryId || null,
-      trackerId: tracker.id,
-    });
-
-    await task.setTags([trackedTag]);
-
-    const completeTask = await Task.findByPk(task.id, {
-      include: [
-        { model: Category, as: 'category' },
-        { model: Tag, as: 'tags' },
-      ],
-    });
-
-    tasks.push(completeTask);
-    console.log(`Created task "${task.title}" for end of month (${dueDate.toISOString()})`);
-  } else {
-    // For daily/hourly, create single task for today
-    const task = await createTrackerTask(models, tracker);
-    if (task) tasks.push(task);
+  for (const occurrence of occurrences) {
+    const task = await createTrackerTask(models, tracker, occurrence);
+    tasks.push(task);
   }
 
+  console.log(`Created ${tasks.length} initial task(s) for tracker "${tracker.name}"`);
   return tasks;
 }
 
 /**
- * Gets the name of a day from its number (0-6)
- */
-function getDayName(dayNum) {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return days[dayNum] || 'Unknown';
-}
-
-/**
- * Calculates the end date of a period given a start date and frequency.
- * @param {string} frequency - The frequency (hourly, daily, weekly, monthly)
- * @param {Date} periodStart - The start of the period
- * @returns {Date} The end of the period
- */
-function getPeriodEndDate(frequency, periodStart) {
-  const end = new Date(periodStart);
-
-  switch (frequency) {
-    case 'hourly':
-      end.setHours(end.getHours() + 1);
-      break;
-    case 'daily':
-      end.setDate(end.getDate() + 1);
-      break;
-    case 'weekly':
-      end.setDate(end.getDate() + 7);
-      break;
-    case 'monthly':
-      end.setMonth(end.getMonth() + 1);
-      break;
-    default:
-      end.setDate(end.getDate() + 1);
-  }
-
-  return end;
-}
-
-/**
- * Counts the number of period boundaries crossed between two dates.
- * Uses calendar-aligned boundaries (week starts Sunday, month starts 1st).
- * @param {string} frequency - The frequency (hourly, daily, weekly, monthly)
- * @param {Date} fromDate - Start date
- * @param {Date} toDate - End date
- * @returns {number} Number of complete periods elapsed
- */
-function countPeriodsElapsed(frequency, fromDate, toDate) {
-  const from = new Date(fromDate);
-  const to = new Date(toDate);
-
-  switch (frequency) {
-    case 'hourly': {
-      const diffMs = to.getTime() - from.getTime();
-      return Math.floor(diffMs / (60 * 60 * 1000));
-    }
-    case 'daily': {
-      // Count calendar days between dates
-      const fromDay = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-      const toDay = new Date(to.getFullYear(), to.getMonth(), to.getDate());
-      const diffMs = toDay.getTime() - fromDay.getTime();
-      return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-    }
-    case 'weekly': {
-      // Count calendar weeks (Sunday to Saturday)
-      const fromWeekStart = new Date(from);
-      fromWeekStart.setDate(from.getDate() - from.getDay());
-      fromWeekStart.setHours(0, 0, 0, 0);
-
-      const toWeekStart = new Date(to);
-      toWeekStart.setDate(to.getDate() - to.getDay());
-      toWeekStart.setHours(0, 0, 0, 0);
-
-      const diffMs = toWeekStart.getTime() - fromWeekStart.getTime();
-      return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
-    }
-    case 'monthly': {
-      // Count calendar months
-      return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
-    }
-    default:
-      return 0;
-  }
-}
-
-/**
- * Checks and resets tracker periods for all active trackers.
- * This function evaluates elapsed periods and:
- * - Breaks streaks if goals weren't met
- * - Resets currentValue for new periods
- * - Tracks consecutiveMissed periods
- * - Auto-archives trackers with 7+ consecutive misses
+ * Creates the next occurrence task after one is completed.
  *
  * @param {Object} models - User-specific models
- * @returns {Promise<{evaluated: number, reset: number, archived: number}>} Results
+ * @param {Tracker} tracker - The tracker
+ * @param {Task} completedTask - The task that was just completed
+ * @returns {Promise<Task|null>} The new task, or null if already exists
  */
-async function checkAndResetTrackerPeriods(models) {
-  const { Tracker } = models;
+async function createNextTrackerTask(models, tracker, completedTask) {
+  const { Task } = models;
 
-  const results = {
-    evaluated: 0,
-    reset: 0,
-    archived: 0,
-    errors: [],
-  };
+  // Get the next occurrence after the completed task's due date
+  const completedDueDate = new Date(completedTask.dueDate);
+  const nextOccurrences = getNextScheduledOccurrences(tracker, completedDueDate, 3);
 
-  try {
-    // Get all active, non-paused trackers
-    const trackers = await Tracker.findAll({
+  // Find the first occurrence that doesn't have a task yet
+  for (const occurrence of nextOccurrences) {
+    // Skip if this is the same as the completed task
+    if (occurrence.getTime() === completedDueDate.getTime()) {
+      continue;
+    }
+
+    // Check if task already exists
+    const existingTask = await Task.findOne({
       where: {
-        isActive: true,
-        isPaused: false,
+        trackerId: tracker.id,
+        status: { [Op.in]: ['pending', 'in_progress'] },
+        dueDate: occurrence,
       },
     });
 
-    const now = new Date();
-
-    for (const tracker of trackers) {
-      try {
-        results.evaluated++;
-
-        // Get the current period start for this frequency
-        const currentPeriodStart = getPeriodStartDate(tracker.frequency);
-        const trackerPeriodStart = new Date(tracker.periodStartDate);
-
-        // If tracker's period is already current, no reset needed
-        if (trackerPeriodStart >= currentPeriodStart) {
-          continue;
-        }
-
-        // Calculate how many periods have elapsed using calendar-aligned boundaries
-        const periodsElapsed = countPeriodsElapsed(tracker.frequency, trackerPeriodStart, now);
-
-        if (periodsElapsed === 0) {
-          continue;
-        }
-
-        // Evaluate each missed period
-        let newStreak = tracker.currentStreak;
-        let newConsecutiveMissed = tracker.consecutiveMissed || 0;
-        let totalPeriodsToAdd = periodsElapsed;
-        let successfulPeriodsToAdd = 0;
-
-        // The first elapsed period might have been completed
-        // (if currentValue >= targetValue when that period ended)
-        const wasFirstPeriodComplete = tracker.currentValue >= tracker.targetValue;
-
-        if (wasFirstPeriodComplete) {
-          // First period was successful
-          newStreak++;
-          successfulPeriodsToAdd++;
-          newConsecutiveMissed = 0;
-
-          // Remaining periods (2nd onward) were all missed
-          const missedPeriods = periodsElapsed - 1;
-          if (missedPeriods > 0) {
-            newStreak = 0; // Streak broken
-            newConsecutiveMissed = missedPeriods;
-          }
-        } else {
-          // First period was NOT completed, all periods are missed
-          newStreak = 0;
-          newConsecutiveMissed += periodsElapsed;
-        }
-
-        // Update best streak if applicable
-        const newBestStreak = Math.max(tracker.bestStreak, newStreak);
-
-        // Check for auto-archive (7+ consecutive missed periods)
-        const shouldArchive = newConsecutiveMissed >= 7;
-
-        // Update the tracker
-        await tracker.update({
-          currentValue: 0,
-          periodStartDate: currentPeriodStart,
-          currentStreak: newStreak,
-          bestStreak: newBestStreak,
-          consecutiveMissed: newConsecutiveMissed,
-          totalPeriods: tracker.totalPeriods + totalPeriodsToAdd,
-          successfulPeriods: tracker.successfulPeriods + successfulPeriodsToAdd,
-          isActive: !shouldArchive,
-        });
-
-        results.reset++;
-
-        if (shouldArchive) {
-          results.archived++;
-          console.log(`Auto-archived tracker "${tracker.name}" after ${newConsecutiveMissed} consecutive missed periods`);
-        } else {
-          console.log(`Reset tracker "${tracker.name}": ${periodsElapsed} periods elapsed, streak=${newStreak}, missed=${newConsecutiveMissed}`);
-        }
-      } catch (error) {
-        console.error(`Error resetting tracker ${tracker.id}:`, error);
-        results.errors.push({ trackerId: tracker.id, error: error.message });
-      }
+    if (!existingTask) {
+      const task = await createTrackerTask(models, tracker, occurrence);
+      return task;
     }
-
-    return results;
-  } catch (error) {
-    console.error('Error in checkAndResetTrackerPeriods:', error);
-    throw error;
   }
+
+  console.log(`No new task needed for tracker "${tracker.name}" - upcoming tasks already exist`);
+  return null;
 }
+
+/**
+ * Checks for missed occurrences and updates tracker streak.
+ * Called when logging progress or completing a task.
+ *
+ * @param {Object} models - User-specific models
+ * @param {Tracker} tracker - The tracker to check
+ * @param {Date} currentOccurrence - The occurrence being completed
+ * @returns {Promise<{streakBroken: boolean, missedCount: number}>}
+ */
+async function checkMissedOccurrences(models, tracker, currentOccurrence) {
+  const { Task } = models;
+
+  // Get the previous occurrence
+  const prevOccurrence = getPreviousScheduledOccurrence(tracker, currentOccurrence);
+
+  if (!prevOccurrence) {
+    // No previous occurrence (first time), streak continues
+    return { streakBroken: false, missedCount: 0 };
+  }
+
+  // Check if the previous occurrence was completed
+  const prevTask = await Task.findOne({
+    where: {
+      trackerId: tracker.id,
+      status: 'completed',
+      dueDate: {
+        [Op.between]: [
+          new Date(prevOccurrence.getTime() - 60000),
+          new Date(prevOccurrence.getTime() + 60000),
+        ],
+      },
+    },
+  });
+
+  // Also check if tracker's lastOccurrenceDate matches
+  const lastOccurrenceMatches = tracker.lastOccurrenceDate &&
+    Math.abs(new Date(tracker.lastOccurrenceDate).getTime() - prevOccurrence.getTime()) < 60000;
+
+  if (prevTask || lastOccurrenceMatches) {
+    // Previous occurrence was completed, streak continues
+    return { streakBroken: false, missedCount: 0 };
+  }
+
+  // Previous occurrence was missed, streak is broken
+  return { streakBroken: true, missedCount: 1 };
+}
+
+// Legacy exports for backward compatibility (some are stubs)
+const calculateDueDate = (frequency, startDate = new Date()) => {
+  // Simplified - just returns the date for compatibility
+  return new Date(startDate);
+};
+
+const calculateInitialScheduledDueDate = (tracker) => {
+  const occurrences = getNextScheduledOccurrences(tracker, new Date(), 1);
+  return occurrences[0] || new Date();
+};
+
+const calculateNextDueDate = (tracker, fromDate = new Date()) => {
+  const occurrences = getNextScheduledOccurrences(tracker, fromDate, 2);
+  // Return second occurrence (first might be the current one)
+  return occurrences[1] || occurrences[0] || new Date();
+};
+
+// Stub for legacy compatibility - not used in new model
+const isTodayScheduled = () => true;
+const findActiveTrackerTask = async () => null;
+const getPeriodStartDate = () => new Date();
+const getPeriodEndDate = () => new Date();
+const countPeriodsElapsed = () => 0;
+const checkAndResetTrackerPeriods = async () => ({ evaluated: 0, reset: 0, archived: 0 });
 
 module.exports = {
   TRACKED_TAG_NAME,
   TRACKED_TAG_COLOR,
   ensureTrackedTag,
+  parseScheduledTime,
+  getDayName,
+  getNextScheduledOccurrences,
+  getPreviousScheduledOccurrence,
+  createTrackerTask,
+  archiveStaleTasks,
+  generateRecurringTasks,
+  createAllScheduledTasks,
+  createNextTrackerTask,
+  checkMissedOccurrences,
+  // Legacy exports
   calculateDueDate,
   calculateInitialScheduledDueDate,
   calculateNextDueDate,
-  createTrackerTask,
-  createNextTrackerTask,
-  createAllScheduledTasks,
-  generateRecurringTasks,
-  archiveStaleTasks,
   isTodayScheduled,
   findActiveTrackerTask,
   getPeriodStartDate,
