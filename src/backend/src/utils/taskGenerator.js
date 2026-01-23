@@ -162,9 +162,12 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
     }
 
     case 'daily': {
-      // Just today at the scheduled time
+      // Just today at the scheduled time, but only if it's in the future
       const occurrence = createUTCDate(year, month, date, hours, minutes);
-      occurrences.push(occurrence);
+      // Only include if the time hasn't passed yet
+      if (occurrence.getTime() > now.getTime()) {
+        occurrences.push(occurrence);
+      }
       break;
     }
 
@@ -174,8 +177,8 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
         ? tracker.scheduledDays.sort((a, b) => a - b)
         : [0]; // Default to Sunday if no days specified
 
-      // Start of today (midnight UTC)
-      const todayStart = Date.UTC(year, month, date, 0, 0, 0, 0);
+      // Current timestamp - never create tasks before this moment
+      const nowTimestamp = now.getTime();
       const currentDayOfWeek = now.getUTCDay();
 
       // Find occurrences for today and the next 2 weeks to cover all upcoming scheduled days
@@ -192,8 +195,8 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
           const targetDate = date + daysUntil;
           const occurrence = createUTCDate(year, month, targetDate, hours, minutes);
 
-          // Only include if today or future
-          if (occurrence.getTime() >= todayStart) {
+          // Only include if occurrence is in the future (not in the past)
+          if (occurrence.getTime() > nowTimestamp) {
             occurrences.push(occurrence);
           }
         }
@@ -215,14 +218,14 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
       // Get days in current month
       const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 
-      // Get start of today for comparison - don't create tasks in the past
-      const todayStart = Date.UTC(year, month, date, 0, 0, 0, 0);
+      // Current timestamp - never create tasks before this moment
+      const nowTimestamp = now.getTime();
 
       for (const targetDate of scheduledDates) {
         if (targetDate <= daysInMonth) {
           const occurrence = createUTCDate(year, month, targetDate, hours, minutes);
-          // Only include if not in the past
-          if (occurrence.getTime() >= todayStart) {
+          // Only include if occurrence is in the future
+          if (occurrence.getTime() > nowTimestamp) {
             occurrences.push(occurrence);
           }
         }
