@@ -67,50 +67,66 @@ function getDayName(dayNum) {
 }
 
 /**
+ * Creates a date without timezone conversion issues.
+ * Uses UTC methods to ensure consistent behavior regardless of server timezone.
+ */
+function createLocalDate(year, month, day, hours = 0, minutes = 0) {
+  // Create a date string in ISO format but treat it as local time
+  // This avoids timezone conversion issues between server and client
+  const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00.000Z`;
+  return new Date(dateStr);
+}
+
+/**
  * Gets the start and end of the current period based on frequency.
+ * Uses UTC to avoid timezone issues - treats all times as "local" by using UTC.
  * @param {string} frequency - 'hourly', 'daily', 'weekly', or 'monthly'
  * @param {Date} referenceDate - Date to calculate period from
  * @returns {{start: Date, end: Date}} Period boundaries
  */
 function getCurrentPeriodBounds(frequency, referenceDate = new Date()) {
-  const now = new Date(referenceDate);
+  // Use UTC values to avoid server timezone issues
+  const now = referenceDate;
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const date = now.getUTCDate();
+  const dayOfWeek = now.getUTCDay();
 
   switch (frequency) {
     case 'hourly': {
-      const start = new Date(now);
-      start.setMinutes(0, 0, 0);
-      const end = new Date(start);
-      end.setHours(end.getHours() + 1);
+      const hour = now.getUTCHours();
+      const start = createLocalDate(year, month, date, hour, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
       return { start, end };
     }
 
     case 'daily': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
+      const start = createLocalDate(year, month, date, 0, 0);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
       return { start, end };
     }
 
     case 'weekly': {
       // Week starts on Sunday (day 0)
-      const dayOfWeek = now.getDay();
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek, 0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 7);
+      const startDate = date - dayOfWeek;
+      const start = createLocalDate(year, month, startDate, 0, 0);
+      const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
       return { start, end };
     }
 
     case 'monthly': {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+      const start = createLocalDate(year, month, 1, 0, 0);
+      // Next month's first day
+      const nextMonth = month + 1;
+      const nextYear = nextMonth > 11 ? year + 1 : year;
+      const end = createLocalDate(nextYear, nextMonth % 12, 1, 0, 0);
       return { start, end };
     }
 
     default:
       // Default to daily
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
+      const start = createLocalDate(year, month, date, 0, 0);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
       return { start, end };
   }
 }
@@ -118,6 +134,7 @@ function getCurrentPeriodBounds(frequency, referenceDate = new Date()) {
 /**
  * Gets all scheduled occurrences within the CURRENT period only.
  * This is the key function that scopes tasks to their natural period.
+ * Uses UTC to avoid server timezone issues.
  *
  * @param {Tracker} tracker - The tracker with scheduling information
  * @param {Date} referenceDate - Date to calculate from (defaults to now)
@@ -126,21 +143,26 @@ function getCurrentPeriodBounds(frequency, referenceDate = new Date()) {
 function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
   const occurrences = [];
   const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-  const now = new Date(referenceDate);
+  const now = referenceDate;
   const { start: periodStart, end: periodEnd } = getCurrentPeriodBounds(tracker.frequency, now);
+
+  // Get UTC values for date calculations
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const date = now.getUTCDate();
 
   switch (tracker.frequency) {
     case 'hourly': {
       // Just the current hour
-      const occurrence = new Date(now);
-      occurrence.setMinutes(minutes, 0, 0);
+      const hour = now.getUTCHours();
+      const occurrence = createLocalDate(year, month, date, hour, minutes);
       occurrences.push(occurrence);
       break;
     }
 
     case 'daily': {
       // Just today at the scheduled time
-      const occurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      const occurrence = createLocalDate(year, month, date, hours, minutes);
       occurrences.push(occurrence);
       break;
     }
@@ -151,11 +173,14 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
         ? tracker.scheduledDays.sort((a, b) => a - b)
         : [0]; // Default to Sunday if no days specified
 
-      for (const dayOfWeek of scheduledDays) {
-        // Calculate the date for this day of the week within the current week
-        const occurrence = new Date(periodStart);
-        occurrence.setDate(periodStart.getDate() + dayOfWeek);
-        occurrence.setHours(hours, minutes, 0, 0);
+      // Get the Sunday of this week
+      const dayOfWeek = now.getUTCDay();
+      const sundayDate = date - dayOfWeek;
+
+      for (const targetDay of scheduledDays) {
+        // Calculate the date for this day of the week
+        const targetDate = sundayDate + targetDay;
+        const occurrence = createLocalDate(year, month, targetDate, hours, minutes);
 
         // Only include if within period bounds
         if (occurrence >= periodStart && occurrence < periodEnd) {
@@ -171,11 +196,12 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
         ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
         : [1]; // Default to 1st if no dates specified
 
-      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      // Get days in current month
+      const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 
-      for (const date of scheduledDates) {
-        if (date <= daysInMonth) {
-          const occurrence = new Date(now.getFullYear(), now.getMonth(), date, hours, minutes, 0, 0);
+      for (const targetDate of scheduledDates) {
+        if (targetDate <= daysInMonth) {
+          const occurrence = createLocalDate(year, month, targetDate, hours, minutes);
           occurrences.push(occurrence);
         }
       }
@@ -184,7 +210,7 @@ function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
 
     default: {
       // Fallback: daily
-      const occurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      const occurrence = createLocalDate(year, month, date, hours, minutes);
       occurrences.push(occurrence);
     }
   }
