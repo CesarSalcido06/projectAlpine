@@ -1,12 +1,13 @@
 /**
- * Project Alpine - Task Generator Utility (Occurrence-Based)
+ * Project Alpine - Task Generator Utility (Period-Bounded)
  *
- * Generates tasks for trackers based on their scheduled occurrences.
- * Each scheduled time is treated as an independent occurrence:
- * - Weekly with Mon/Wed/Fri creates 3 separate tasks
- * - Daily creates one task per day
- * - Monthly with 1st/15th creates 2 tasks per month
+ * Generates tasks for trackers scoped to their natural period:
+ * - Daily: Creates task for TODAY only
+ * - Weekly: Creates tasks for all scheduled days in THIS WEEK (Sun-Sat)
+ * - Monthly: Creates tasks for all scheduled dates in THIS MONTH
+ * - Hourly: Creates task for the current hour
  *
+ * New tasks are created when the period rolls over (new day/week/month).
  * All functions accept a models object for per-user database isolation.
  */
 
@@ -66,129 +67,116 @@ function getDayName(dayNum) {
 }
 
 /**
- * Gets the next N scheduled occurrences for a tracker.
- * This is the core function for occurrence-based scheduling.
+ * Gets the start and end of the current period based on frequency.
+ * @param {string} frequency - 'hourly', 'daily', 'weekly', or 'monthly'
+ * @param {Date} referenceDate - Date to calculate period from
+ * @returns {{start: Date, end: Date}} Period boundaries
+ */
+function getCurrentPeriodBounds(frequency, referenceDate = new Date()) {
+  const now = new Date(referenceDate);
+
+  switch (frequency) {
+    case 'hourly': {
+      const start = new Date(now);
+      start.setMinutes(0, 0, 0);
+      const end = new Date(start);
+      end.setHours(end.getHours() + 1);
+      return { start, end };
+    }
+
+    case 'daily': {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return { start, end };
+    }
+
+    case 'weekly': {
+      // Week starts on Sunday (day 0)
+      const dayOfWeek = now.getDay();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek, 0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 7);
+      return { start, end };
+    }
+
+    case 'monthly': {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+      return { start, end };
+    }
+
+    default:
+      // Default to daily
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return { start, end };
+  }
+}
+
+/**
+ * Gets all scheduled occurrences within the CURRENT period only.
+ * This is the key function that scopes tasks to their natural period.
  *
  * @param {Tracker} tracker - The tracker with scheduling information
- * @param {Date} fromDate - Start date to calculate from (defaults to now)
- * @param {number} count - Number of occurrences to return (default 7)
- * @returns {Date[]} Array of occurrence dates
+ * @param {Date} referenceDate - Date to calculate from (defaults to now)
+ * @returns {Date[]} Array of occurrence dates within the current period
  */
-function getNextScheduledOccurrences(tracker, fromDate = new Date(), count = 7) {
+function getOccurrencesForCurrentPeriod(tracker, referenceDate = new Date()) {
   const occurrences = [];
   const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
-  const now = new Date(fromDate);
+  const now = new Date(referenceDate);
+  const { start: periodStart, end: periodEnd } = getCurrentPeriodBounds(tracker.frequency, now);
 
   switch (tracker.frequency) {
     case 'hourly': {
-      // Each hour is an occurrence
-      const startHour = new Date(now);
-      startHour.setMinutes(minutes, 0, 0);
-      if (startHour <= now) {
-        startHour.setHours(startHour.getHours() + 1);
-      }
-      for (let i = 0; i < count; i++) {
-        const occurrence = new Date(startHour);
-        occurrence.setHours(occurrence.getHours() + i);
-        occurrences.push(occurrence);
-      }
+      // Just the current hour
+      const occurrence = new Date(now);
+      occurrence.setMinutes(minutes, 0, 0);
+      occurrences.push(occurrence);
       break;
     }
 
     case 'daily': {
-      // Each day at scheduled time
-      const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-      // If today's occurrence has passed, start from tomorrow
-      if (startDay <= now) {
-        startDay.setDate(startDay.getDate() + 1);
-      }
-      // But include today if the time hasn't passed yet
-      const todayOccurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-      if (todayOccurrence > now) {
-        occurrences.push(todayOccurrence);
-      }
-      // Add future days
-      for (let i = 0; occurrences.length < count; i++) {
-        const occurrence = new Date(startDay);
-        occurrence.setDate(occurrence.getDate() + i);
-        if (!occurrences.some(d => d.getTime() === occurrence.getTime())) {
+      // Just today at the scheduled time
+      const occurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      occurrences.push(occurrence);
+      break;
+    }
+
+    case 'weekly': {
+      // All scheduled days within this week
+      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
+        ? tracker.scheduledDays.sort((a, b) => a - b)
+        : [0]; // Default to Sunday if no days specified
+
+      for (const dayOfWeek of scheduledDays) {
+        // Calculate the date for this day of the week within the current week
+        const occurrence = new Date(periodStart);
+        occurrence.setDate(periodStart.getDate() + dayOfWeek);
+        occurrence.setHours(hours, minutes, 0, 0);
+
+        // Only include if within period bounds
+        if (occurrence >= periodStart && occurrence < periodEnd) {
           occurrences.push(occurrence);
         }
       }
       break;
     }
 
-    case 'weekly': {
-      // Each scheduled day of the week
-      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
-        ? tracker.scheduledDays.sort((a, b) => a - b)
-        : [0]; // Default to Sunday if no days specified
-
-      let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      let addedCount = 0;
-      const maxIterations = count * 7 + 14; // Safety limit
-      let iterations = 0;
-
-      while (addedCount < count && iterations < maxIterations) {
-        iterations++;
-        const dayOfWeek = currentDate.getDay();
-
-        if (scheduledDays.includes(dayOfWeek)) {
-          const occurrence = new Date(
-            currentDate.getFullYear(),
-            currentDate.getMonth(),
-            currentDate.getDate(),
-            hours,
-            minutes,
-            0,
-            0
-          );
-          // Only add if it's in the future (or today's occurrence hasn't passed)
-          if (occurrence > now || (occurrence.toDateString() === now.toDateString() && occurrence > now)) {
-            occurrences.push(occurrence);
-            addedCount++;
-          } else if (occurrence.toDateString() === now.toDateString()) {
-            // Today's occurrence - add if time hasn't passed
-            const todayCheck = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-            if (todayCheck > now) {
-              occurrences.push(todayCheck);
-              addedCount++;
-            }
-          }
-        }
-
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-      break;
-    }
-
     case 'monthly': {
-      // Each scheduled date of the month
+      // All scheduled dates within this month
       const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
         ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
         : [1]; // Default to 1st if no dates specified
 
-      let currentMonth = now.getMonth();
-      let currentYear = now.getFullYear();
-      let addedCount = 0;
-      const maxMonths = Math.ceil(count / scheduledDates.length) + 2;
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-      for (let monthOffset = 0; monthOffset < maxMonths && addedCount < count; monthOffset++) {
-        const month = (currentMonth + monthOffset) % 12;
-        const year = currentYear + Math.floor((currentMonth + monthOffset) / 12);
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-        for (const date of scheduledDates) {
-          if (date > daysInMonth) continue; // Skip invalid dates
-
-          const occurrence = new Date(year, month, date, hours, minutes, 0, 0);
-
-          // Only add future occurrences
-          if (occurrence > now) {
-            occurrences.push(occurrence);
-            addedCount++;
-            if (addedCount >= count) break;
-          }
+      for (const date of scheduledDates) {
+        if (date <= daysInMonth) {
+          const occurrence = new Date(now.getFullYear(), now.getMonth(), date, hours, minutes, 0, 0);
+          occurrences.push(occurrence);
         }
       }
       break;
@@ -196,19 +184,12 @@ function getNextScheduledOccurrences(tracker, fromDate = new Date(), count = 7) 
 
     default: {
       // Fallback: daily
-      const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
-      if (startDay <= now) {
-        startDay.setDate(startDay.getDate() + 1);
-      }
-      for (let i = 0; i < count; i++) {
-        const occurrence = new Date(startDay);
-        occurrence.setDate(occurrence.getDate() + i);
-        occurrences.push(occurrence);
-      }
+      const occurrence = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      occurrences.push(occurrence);
     }
   }
 
-  return occurrences.slice(0, count);
+  return occurrences;
 }
 
 /**
@@ -338,14 +319,14 @@ async function createTrackerTask(models, tracker, dueDate) {
     ],
   });
 
-  console.log(`Created task "${task.title}" for tracker ${tracker.id} with due date ${dueDate.toISOString()}`);
+  console.log(`Created task "${task.title}" due ${dueDate.toISOString()}`);
 
   return completeTask;
 }
 
 /**
  * Archives stale tasks (past due date, not completed).
- * Occurrence-based: archives any pending task where dueDate < now.
+ * For period-based: archives tasks from PREVIOUS periods.
  *
  * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker to clean up
@@ -355,23 +336,15 @@ async function archiveStaleTasks(models, tracker) {
   const { Task } = models;
   const now = new Date();
 
-  // For hourly, use current hour as cutoff
-  // For daily/weekly/monthly, use start of today
-  let cutoffDate;
-  if (tracker.frequency === 'hourly') {
-    cutoffDate = new Date(now);
-    cutoffDate.setMinutes(0, 0, 0);
-  } else {
-    // Start of today - tasks due before today are stale
-    cutoffDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  }
+  // Get the start of current period - anything before this is stale
+  const { start: periodStart } = getCurrentPeriodBounds(tracker.frequency, now);
 
-  // Find pending/in_progress tasks with due date before cutoff
+  // Find pending/in_progress tasks with due date before current period
   const staleTasks = await Task.findAll({
     where: {
       trackerId: tracker.id,
       status: { [Op.in]: ['pending', 'in_progress'] },
-      dueDate: { [Op.lt]: cutoffDate },
+      dueDate: { [Op.lt]: periodStart },
     },
   });
 
@@ -389,7 +362,7 @@ async function archiveStaleTasks(models, tracker) {
 }
 
 /**
- * Generates tasks for all upcoming scheduled occurrences.
+ * Generates tasks for the CURRENT period only.
  * This is the main task generation function - called on every task list fetch.
  *
  * @param {Object} models - User-specific models
@@ -421,13 +394,12 @@ async function generateRecurringTasks(models) {
 
     for (const tracker of trackers) {
       try {
-        // Step 1: Archive any stale tasks
+        // Step 1: Archive any stale tasks from previous periods
         const archivedCount = await archiveStaleTasks(models, tracker);
         results.archived += archivedCount;
 
-        // Step 2: Get next scheduled occurrences (7 for weekly/monthly, 3 for daily/hourly)
-        const occurrenceCount = (tracker.frequency === 'weekly' || tracker.frequency === 'monthly') ? 7 : 3;
-        const occurrences = getNextScheduledOccurrences(tracker, new Date(), occurrenceCount);
+        // Step 2: Get occurrences for the CURRENT period only
+        const occurrences = getOccurrencesForCurrentPeriod(tracker);
 
         // Step 3: For each occurrence, check if a task exists
         for (const occurrence of occurrences) {
@@ -435,7 +407,7 @@ async function generateRecurringTasks(models) {
           const existingTask = await Task.findOne({
             where: {
               trackerId: tracker.id,
-              status: { [Op.in]: ['pending', 'in_progress'] },
+              status: { [Op.in]: ['pending', 'in_progress', 'completed'] },
               dueDate: occurrence,
             },
           });
@@ -451,7 +423,7 @@ async function generateRecurringTasks(models) {
           const nearbyTask = await Task.findOne({
             where: {
               trackerId: tracker.id,
-              status: { [Op.in]: ['pending', 'in_progress'] },
+              status: { [Op.in]: ['pending', 'in_progress', 'completed'] },
               dueDate: { [Op.between]: [windowStart, windowEnd] },
             },
           });
@@ -482,7 +454,7 @@ async function generateRecurringTasks(models) {
 }
 
 /**
- * Creates tasks for all scheduled occurrences when a tracker is first created.
+ * Creates tasks for all scheduled occurrences in the CURRENT period when a tracker is created.
  * Called once during tracker creation.
  *
  * @param {Object} models - User-specific models
@@ -490,8 +462,7 @@ async function generateRecurringTasks(models) {
  * @returns {Promise<Task[]>} Array of created tasks
  */
 async function createAllScheduledTasks(models, tracker) {
-  const occurrenceCount = (tracker.frequency === 'weekly' || tracker.frequency === 'monthly') ? 7 : 3;
-  const occurrences = getNextScheduledOccurrences(tracker, new Date(), occurrenceCount);
+  const occurrences = getOccurrencesForCurrentPeriod(tracker);
 
   const tasks = [];
   for (const occurrence of occurrences) {
@@ -499,53 +470,29 @@ async function createAllScheduledTasks(models, tracker) {
     tasks.push(task);
   }
 
-  console.log(`Created ${tasks.length} initial task(s) for tracker "${tracker.name}"`);
+  console.log(`Created ${tasks.length} task(s) for tracker "${tracker.name}" (current period)`);
   return tasks;
 }
 
 /**
- * Creates the next occurrence task after one is completed.
+ * Does NOT create next period tasks - that happens when the new period starts.
+ * This is called after completion but we no longer auto-create future tasks.
  *
  * @param {Object} models - User-specific models
  * @param {Tracker} tracker - The tracker
  * @param {Task} completedTask - The task that was just completed
- * @returns {Promise<Task|null>} The new task, or null if already exists
+ * @returns {Promise<null>} Always returns null - next period tasks created on period rollover
  */
 async function createNextTrackerTask(models, tracker, completedTask) {
-  const { Task } = models;
-
-  // Get the next occurrence after the completed task's due date
-  const completedDueDate = new Date(completedTask.dueDate);
-  const nextOccurrences = getNextScheduledOccurrences(tracker, completedDueDate, 3);
-
-  // Find the first occurrence that doesn't have a task yet
-  for (const occurrence of nextOccurrences) {
-    // Skip if this is the same as the completed task
-    if (occurrence.getTime() === completedDueDate.getTime()) {
-      continue;
-    }
-
-    // Check if task already exists
-    const existingTask = await Task.findOne({
-      where: {
-        trackerId: tracker.id,
-        status: { [Op.in]: ['pending', 'in_progress'] },
-        dueDate: occurrence,
-      },
-    });
-
-    if (!existingTask) {
-      const task = await createTrackerTask(models, tracker, occurrence);
-      return task;
-    }
-  }
-
-  console.log(`No new task needed for tracker "${tracker.name}" - upcoming tasks already exist`);
+  // Tasks for the next period are created when that period starts
+  // (via generateRecurringTasks being called on next request)
+  // We don't auto-create future period tasks here
+  console.log(`Task completed for tracker "${tracker.name}" - next period tasks will generate automatically`);
   return null;
 }
 
 /**
- * Checks for missed occurrences and updates tracker streak.
+ * Checks for missed occurrences and determines if streak should break.
  * Called when logging progress or completing a task.
  *
  * @param {Object} models - User-specific models
@@ -591,24 +538,128 @@ async function checkMissedOccurrences(models, tracker, currentOccurrence) {
   return { streakBroken: true, missedCount: 1 };
 }
 
-// Legacy exports for backward compatibility (some are stubs)
+/**
+ * Gets the next scheduled occurrences (for display/API purposes).
+ * Unlike getOccurrencesForCurrentPeriod, this can look into future periods.
+ *
+ * @param {Tracker} tracker - The tracker
+ * @param {Date} fromDate - Start date
+ * @param {number} count - Number of occurrences to get
+ * @returns {Date[]} Array of upcoming occurrence dates
+ */
+function getNextScheduledOccurrences(tracker, fromDate = new Date(), count = 3) {
+  const occurrences = [];
+  const { hours, minutes } = parseScheduledTime(tracker.scheduledTime);
+  const now = new Date(fromDate);
+
+  switch (tracker.frequency) {
+    case 'hourly': {
+      const startHour = new Date(now);
+      startHour.setMinutes(minutes, 0, 0);
+      if (startHour <= now) {
+        startHour.setHours(startHour.getHours() + 1);
+      }
+      for (let i = 0; i < count; i++) {
+        const occurrence = new Date(startHour);
+        occurrence.setHours(occurrence.getHours() + i);
+        occurrences.push(occurrence);
+      }
+      break;
+    }
+
+    case 'daily': {
+      let currentDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+      if (currentDay <= now) {
+        currentDay.setDate(currentDay.getDate() + 1);
+      }
+      for (let i = 0; i < count; i++) {
+        const occurrence = new Date(currentDay);
+        occurrence.setDate(occurrence.getDate() + i);
+        occurrences.push(occurrence);
+      }
+      break;
+    }
+
+    case 'weekly': {
+      const scheduledDays = tracker.scheduledDays && tracker.scheduledDays.length > 0
+        ? tracker.scheduledDays.sort((a, b) => a - b)
+        : [0];
+
+      let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let addedCount = 0;
+
+      while (addedCount < count) {
+        const dayOfWeek = currentDate.getDay();
+        if (scheduledDays.includes(dayOfWeek)) {
+          const occurrence = new Date(
+            currentDate.getFullYear(),
+            currentDate.getMonth(),
+            currentDate.getDate(),
+            hours,
+            minutes,
+            0,
+            0
+          );
+          if (occurrence > now) {
+            occurrences.push(occurrence);
+            addedCount++;
+          }
+        }
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+      break;
+    }
+
+    case 'monthly': {
+      const scheduledDates = tracker.scheduledDatesOfMonth && tracker.scheduledDatesOfMonth.length > 0
+        ? tracker.scheduledDatesOfMonth.sort((a, b) => a - b)
+        : [1];
+
+      let currentMonth = now.getMonth();
+      let currentYear = now.getFullYear();
+      let addedCount = 0;
+
+      while (addedCount < count) {
+        const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+        for (const date of scheduledDates) {
+          if (date <= daysInMonth) {
+            const occurrence = new Date(currentYear, currentMonth, date, hours, minutes, 0, 0);
+            if (occurrence > now) {
+              occurrences.push(occurrence);
+              addedCount++;
+              if (addedCount >= count) break;
+            }
+          }
+        }
+        currentMonth++;
+        if (currentMonth > 11) {
+          currentMonth = 0;
+          currentYear++;
+        }
+      }
+      break;
+    }
+  }
+
+  return occurrences.slice(0, count);
+}
+
+// Legacy exports for backward compatibility
 const calculateDueDate = (frequency, startDate = new Date()) => {
-  // Simplified - just returns the date for compatibility
   return new Date(startDate);
 };
 
 const calculateInitialScheduledDueDate = (tracker) => {
-  const occurrences = getNextScheduledOccurrences(tracker, new Date(), 1);
+  const occurrences = getOccurrencesForCurrentPeriod(tracker);
   return occurrences[0] || new Date();
 };
 
 const calculateNextDueDate = (tracker, fromDate = new Date()) => {
-  const occurrences = getNextScheduledOccurrences(tracker, fromDate, 2);
-  // Return second occurrence (first might be the current one)
-  return occurrences[1] || occurrences[0] || new Date();
+  const occurrences = getNextScheduledOccurrences(tracker, fromDate, 1);
+  return occurrences[0] || new Date();
 };
 
-// Stub for legacy compatibility - not used in new model
+// Legacy stubs
 const isTodayScheduled = () => true;
 const findActiveTrackerTask = async () => null;
 const getPeriodStartDate = () => new Date();
@@ -622,6 +673,8 @@ module.exports = {
   ensureTrackedTag,
   parseScheduledTime,
   getDayName,
+  getCurrentPeriodBounds,
+  getOccurrencesForCurrentPeriod,
   getNextScheduledOccurrences,
   getPreviousScheduledOccurrence,
   createTrackerTask,
