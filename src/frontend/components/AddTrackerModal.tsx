@@ -352,7 +352,7 @@ export default function AddTrackerModal({
                   {/* Time Picker - for daily, weekly, monthly */}
                   {(frequency === 'daily' || frequency === 'weekly' || frequency === 'monthly') && (
                     <FormControl>
-                      <FormLabel fontSize="sm">Task Creation Time</FormLabel>
+                      <FormLabel fontSize="sm">Due Time</FormLabel>
                       <Input
                         type="time"
                         value={scheduledTime}
@@ -364,7 +364,7 @@ export default function AddTrackerModal({
                         w="150px"
                       />
                       <FormHelperText>
-                        Time when the task will be automatically created
+                        Time when the task is due
                       </FormHelperText>
                     </FormControl>
                   )}

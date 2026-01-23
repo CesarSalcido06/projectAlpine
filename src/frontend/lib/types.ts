@@ -172,7 +172,7 @@ export interface Tracker {
   taskCategoryId: number | null;
   taskUrgency: Urgency;
   // Scheduling fields for automatic task generation
-  scheduledTime: string | null; // Time of day for task creation (e.g., "09:00")
+  scheduledTime: string | null; // Time of day when task is due (e.g., "09:00")
   scheduledDays: number[] | null; // Days of week for weekly frequency (0=Sun to 6=Sat)
   scheduledDatesOfMonth: number[] | null; // Days of month for monthly frequency (1-31)
   createdAt: string;
