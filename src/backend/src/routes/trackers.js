@@ -371,7 +371,7 @@ router.post('/', async (req, res) => {
 // ============================================================
 router.put('/:id', async (req, res) => {
   try {
-    const { Tracker } = req.models;
+    const { Tracker, Task } = req.models;
 
     const tracker = await Tracker.findByPk(req.params.id);
 
@@ -386,6 +386,13 @@ router.put('/:id', async (req, res) => {
       'scheduledTime', 'scheduledDays', 'scheduledDatesOfMonth',
     ];
 
+    // Check if schedule-related fields are being changed
+    const scheduleFields = ['scheduledTime', 'scheduledDays', 'scheduledDatesOfMonth', 'frequency'];
+    const scheduleChanged = scheduleFields.some(field =>
+      req.body[field] !== undefined &&
+      JSON.stringify(req.body[field]) !== JSON.stringify(tracker[field])
+    );
+
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
@@ -394,6 +401,25 @@ router.put('/:id', async (req, res) => {
     });
 
     await tracker.update(updates);
+
+    // If schedule changed, delete old pending tasks and regenerate
+    if (scheduleChanged && tracker.generateTasks) {
+      // Delete all pending tasks for this tracker
+      const deleted = await Task.destroy({
+        where: {
+          trackerId: tracker.id,
+          status: ['pending', 'in_progress'],
+        },
+      });
+      console.log(`Deleted ${deleted} old tasks for tracker "${tracker.name}" due to schedule change`);
+
+      // Regenerate tasks with new schedule
+      await tracker.reload();
+      const { generateRecurringTasks } = require('../utils/taskGenerator');
+      await generateRecurringTasks(req.models);
+      console.log(`Regenerated tasks for tracker "${tracker.name}"`);
+    }
+
     res.json(tracker);
   } catch (error) {
     console.error('Error updating tracker:', error);
