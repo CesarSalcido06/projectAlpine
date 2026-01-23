@@ -382,24 +382,26 @@ export default function TrackerCard({
           </VStack>
         </SimpleGrid>
 
-        {/* Log Button */}
-        <Box
-          as="button"
-          w="100%"
-          py={3}
-          borderRadius="lg"
-          bg={isGoalComplete ? 'green.600' : tracker.color}
-          color="white"
-          fontWeight="bold"
-          transition="all 0.2s"
-          _hover={{ opacity: 0.9, transform: 'scale(1.02)' }}
-          _active={{ transform: 'scale(0.98)' }}
-          onClick={() => onLog(tracker.id)}
-          disabled={tracker.isPaused}
-          opacity={tracker.isPaused ? 0.5 : 1}
-        >
-          {tracker.isPaused ? 'Paused' : isGoalComplete ? '+ Log Extra' : `+ Log ${tracker.targetUnit}`}
-        </Box>
+        {/* Log Button - hidden when goal is complete */}
+        {!isGoalComplete && (
+          <Box
+            as="button"
+            w="100%"
+            py={3}
+            borderRadius="lg"
+            bg={tracker.color}
+            color="white"
+            fontWeight="bold"
+            transition="all 0.2s"
+            _hover={{ opacity: 0.9, transform: 'scale(1.02)' }}
+            _active={{ transform: 'scale(0.98)' }}
+            onClick={() => onLog(tracker.id)}
+            disabled={tracker.isPaused}
+            opacity={tracker.isPaused ? 0.5 : 1}
+          >
+            {tracker.isPaused ? 'Paused' : `+ Log ${tracker.targetUnit}`}
+          </Box>
+        )}
       </VStack>
     </Box>
   );
