@@ -90,6 +90,14 @@ async function applyMigrations(sequelize) {
       );
       console.log('Migration: Added consecutive_missed column to trackers');
     }
+
+    // Migration: Add lastOccurrenceDate column to trackers table (for occurrence-based tracking)
+    if (!tableInfo.last_occurrence_date) {
+      await sequelize.query(
+        'ALTER TABLE trackers ADD COLUMN last_occurrence_date DATETIME'
+      );
+      console.log('Migration: Added last_occurrence_date column to trackers');
+    }
   } catch (err) {
     // Table might not exist yet, which is fine - it will be created by sync
     if (!err.message.includes('no such table')) {
