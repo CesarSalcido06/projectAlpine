@@ -33,6 +33,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { fetchTasks, updateTask } from '@/lib/api';
 import type { Task } from '@/lib/types';
 import { useRefresh } from '@/contexts/RefreshContext';
+import { formatTime } from '@/lib/dateUtils';
 
 type ViewType = 'day' | 'week' | 'month';
 
@@ -348,10 +349,7 @@ export default function CalendarView({
                                   </Text>
                                   {task.dueDate && (
                                     <Text fontSize="xs" color="gray.500">
-                                      {new Date(task.dueDate).toLocaleTimeString('en-US', {
-                                        hour: 'numeric',
-                                        minute: '2-digit',
-                                      })}
+                                      {formatTime(task.dueDate)}
                                     </Text>
                                   )}
                                 </VStack>
@@ -496,10 +494,7 @@ export default function CalendarView({
                                   </Text>
                                   {task.dueDate && (
                                     <Text fontSize="xs" color="gray.500">
-                                      {new Date(task.dueDate).toLocaleTimeString('en-US', {
-                                        hour: 'numeric',
-                                        minute: '2-digit',
-                                      })}
+                                      {formatTime(task.dueDate)}
                                     </Text>
                                   )}
                                 </VStack>

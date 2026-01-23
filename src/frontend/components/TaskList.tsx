@@ -23,6 +23,7 @@ import { useState, useEffect } from 'react';
 import { fetchTasks, updateTask } from '@/lib/api';
 import type { Task } from '@/lib/types';
 import { useRefresh } from '@/contexts/RefreshContext';
+import { formatDate, isToday, isOverdue } from '@/lib/dateUtils';
 
 // Urgency level color mapping
 const urgencyColors: Record<string, string> = {
@@ -87,23 +88,20 @@ export default function TaskList({
     }
   };
 
-  // Format due date for display
-  const formatDueDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const today = new Date();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    if (date.toDateString() === today.toDateString()) {
+  // Format due date for display (uses UTC for consistency)
+  const formatTaskDueDate = (dateString: string) => {
+    if (isToday(dateString)) {
       return 'Today';
-    } else if (date.toDateString() === tomorrow.toDateString()) {
-      return 'Tomorrow';
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      });
     }
+    // Check tomorrow using UTC
+    const date = new Date(dateString);
+    const now = new Date();
+    const tomorrowUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const dateUTC = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    if (dateUTC === tomorrowUTC) {
+      return 'Tomorrow';
+    }
+    return formatDate(dateString);
   };
 
   return (
@@ -157,7 +155,7 @@ export default function TaskList({
                     {/* Due date */}
                     {task.dueDate && (
                       <Text fontSize="xs" color="gray.400">
-                        {formatDueDate(task.dueDate)}
+                        {formatTaskDueDate(task.dueDate)}
                       </Text>
                     )}
 

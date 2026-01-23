@@ -35,6 +35,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { fetchTasks, fetchCategories, fetchTags, updateTask, deleteTask } from '@/lib/api';
 import type { Task, Category, Tag } from '@/lib/types';
 import { useRefresh } from '@/contexts/RefreshContext';
+import { formatDate, isToday, isOverdue } from '@/lib/dateUtils';
 
 // Sorting options type
 type SortField = 'dueDate' | 'urgency' | 'category' | 'title' | 'createdAt';
@@ -254,36 +255,33 @@ export default function TaskListFull({
     }
   };
 
-  // Format due date for display
-  const formatDueDate = (dateString: string, taskStatus?: string) => {
-    const date = new Date(dateString);
-    const today = new Date();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
+  // Format due date for display (uses UTC for timezone consistency)
+  const formatDueDateDisplay = (dateString: string, taskStatus?: string) => {
     // Completed tasks should not show as overdue
     if (taskStatus === 'completed') {
       return {
-        text: date.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-        }),
+        text: formatDate(dateString),
         color: 'green.400',
       };
     }
 
-    if (date.toDateString() === today.toDateString()) {
+    if (isToday(dateString)) {
       return { text: 'Today', color: 'orange.400' };
-    } else if (date.toDateString() === tomorrow.toDateString()) {
+    }
+
+    // Check tomorrow using UTC
+    const date = new Date(dateString);
+    const now = new Date();
+    const tomorrowUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const dateUTC = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+
+    if (dateUTC === tomorrowUTC) {
       return { text: 'Tomorrow', color: 'yellow.400' };
-    } else if (date < today) {
+    } else if (isOverdue(dateString)) {
       return { text: 'Overdue', color: 'red.400' };
     } else {
       return {
-        text: date.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-        }),
+        text: formatDate(dateString),
         color: 'gray.400',
       };
     }
@@ -465,7 +463,7 @@ export default function TaskListFull({
           <VStack align="stretch" spacing={2}>
             {filteredAndSortedTasks.map((task) => {
               const dueDateInfo = task.dueDate
-                ? formatDueDate(task.dueDate, task.status)
+                ? formatDueDateDisplay(task.dueDate, task.status)
                 : null;
               const category = categories.find((c) => c.id === task.categoryId);
 

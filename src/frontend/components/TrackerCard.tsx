@@ -22,6 +22,7 @@ import {
   SimpleGrid,
 } from '@chakra-ui/react';
 import type { Tracker, Task } from '@/lib/types';
+import { formatDueDate } from '@/lib/dateUtils';
 
 interface TrackerCardProps {
   tracker: Tracker;
@@ -46,25 +47,6 @@ export default function TrackerCard({
   const pendingTask: Task | undefined = tracker.tasks && tracker.tasks.length > 0
     ? tracker.tasks[0]
     : undefined;
-
-  // Format the due time for display
-  const formatDueTime = (dueDate: string | null): string => {
-    if (!dueDate) return '';
-    const date = new Date(dueDate);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    const isTomorrow = date.toDateString() === new Date(now.getTime() + 86400000).toDateString();
-
-    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    if (isToday) {
-      return `Today at ${timeStr}`;
-    } else if (isTomorrow) {
-      return `Tomorrow at ${timeStr}`;
-    } else {
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ` at ${timeStr}`;
-    }
-  };
 
   const progressPercent = tracker.progressPercentage ||
     Math.min(100, Math.round((tracker.currentValue / tracker.targetValue) * 100));
@@ -249,7 +231,7 @@ export default function TrackerCard({
                 </HStack>
                 {pendingTask.dueDate && (
                   <Text fontSize="xs" color={isOverdue ? 'red.300' : 'gray.400'}>
-                    Due: {formatDueTime(pendingTask.dueDate)}
+                    Due: {formatDueDate(pendingTask.dueDate)}
                   </Text>
                 )}
               </VStack>
