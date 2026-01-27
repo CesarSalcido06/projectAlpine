@@ -59,11 +59,12 @@ function getStreakMultiplier(streak) {
 
 /**
  * Checks if today is a scheduled day for the tracker.
+ * Uses UTC to match how tasks are created and stored.
  */
 function isTodayScheduledDay(tracker) {
   const today = new Date();
-  const dayOfWeek = today.getDay();
-  const dateOfMonth = today.getDate();
+  const dayOfWeek = today.getUTCDay();
+  const dateOfMonth = today.getUTCDate();
 
   switch (tracker.frequency) {
     case 'hourly':
@@ -82,6 +83,7 @@ function isTodayScheduledDay(tracker) {
 
 /**
  * Checks if the tracker has already been completed today.
+ * Uses UTC to match how tasks are created and stored.
  */
 function isAlreadyCompletedToday(tracker) {
   if (!tracker.lastCompletedAt) return false;
@@ -89,12 +91,15 @@ function isAlreadyCompletedToday(tracker) {
   const lastCompleted = new Date(tracker.lastCompletedAt);
   const today = new Date();
 
+  // Compare using UTC dates
+  const lastCompletedUTC = Date.UTC(lastCompleted.getUTCFullYear(), lastCompleted.getUTCMonth(), lastCompleted.getUTCDate());
+  const todayUTC = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+
   if (tracker.frequency === 'hourly') {
-    return lastCompleted.toDateString() === today.toDateString() &&
-           lastCompleted.getHours() === today.getHours();
+    return lastCompletedUTC === todayUTC && lastCompleted.getUTCHours() === today.getUTCHours();
   }
 
-  return lastCompleted.toDateString() === today.toDateString();
+  return lastCompletedUTC === todayUTC;
 }
 
 // ============================================================
@@ -449,7 +454,7 @@ router.post('/:id/log', async (req, res) => {
     // Validation: Is today a scheduled day?
     if (!isTodayScheduledDay(tracker)) {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const today = dayNames[new Date().getDay()];
+      const today = dayNames[new Date().getUTCDay()];
       let scheduledStr = '';
 
       if (tracker.frequency === 'weekly' && tracker.scheduledDays?.length > 0) {
