@@ -33,7 +33,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { fetchTasks, updateTask } from '@/lib/api';
 import type { Task } from '@/lib/types';
 import { useRefresh } from '@/contexts/RefreshContext';
-import { formatTime } from '@/lib/dateUtils';
+import { formatTime, isSameCalendarDay } from '@/lib/dateUtils';
 
 type ViewType = 'day' | 'week' | 'month';
 
@@ -119,13 +119,9 @@ export default function CalendarView({
     onDateChange(newDate);
   };
 
-  // Get tasks for a specific date
+  // Get tasks for a specific date (using UTC to avoid timezone shifts)
   const getTasksForDate = (date: Date): Task[] => {
-    return tasks.filter((task) => {
-      if (!task.dueDate) return false;
-      const taskDate = new Date(task.dueDate);
-      return taskDate.toDateString() === date.toDateString();
-    });
+    return tasks.filter((task) => isSameCalendarDay(task.dueDate, date));
   };
 
   // Generate week days for week view

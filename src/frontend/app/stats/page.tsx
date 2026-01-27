@@ -28,6 +28,7 @@ import AppLayout from '@/components/AppLayout';
 import { AuthGuard } from '@/components/AuthGuard';
 import StatsPanel from '@/components/StatsPanel';
 import { fetchStats, fetchTasks } from '@/lib/api';
+import { isSameCalendarDay } from '@/lib/dateUtils';
 import type { Stats, Task } from '@/lib/types';
 import { useRefresh } from '@/contexts/RefreshContext';
 
@@ -55,12 +56,10 @@ export default function StatsPage() {
     loadData();
   }, [refreshKey]);
 
-  // Calculate additional stats
+  // Calculate additional stats (using UTC to avoid timezone shifts)
   const completedToday = tasks.filter((t) => {
     if (t.status !== 'completed') return false;
-    const updated = new Date(t.updatedAt);
-    const today = new Date();
-    return updated.toDateString() === today.toDateString();
+    return isSameCalendarDay(t.updatedAt, new Date());
   }).length;
 
   const overdueCount = tasks.filter((t) => {

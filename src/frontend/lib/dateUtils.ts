@@ -128,3 +128,38 @@ export function isOverdue(dateStr: string | null | undefined): boolean {
 
   return dateOnly < todayOnly;
 }
+
+/**
+ * Check if a UTC date (from server) matches a local calendar date.
+ * Use this when filtering tasks for a specific calendar day.
+ *
+ * The server stores dates in UTC. When displaying on a calendar,
+ * we want "Jan 27 6am UTC" to appear on Jan 27 on the calendar,
+ * regardless of the user's timezone.
+ *
+ * @param utcDateStr - ISO date string from server (stored in UTC)
+ * @param localDate - Local Date object representing a calendar day
+ * @returns true if the UTC date falls on the same calendar day
+ */
+export function isSameCalendarDay(utcDateStr: string | null | undefined, localDate: Date): boolean {
+  if (!utcDateStr) return false;
+  const utcDate = new Date(utcDateStr);
+
+  // Compare UTC components of the stored date against local date components
+  // This ensures "2026-01-27T06:00:00Z" matches calendar day Jan 27
+  return (
+    utcDate.getUTCFullYear() === localDate.getFullYear() &&
+    utcDate.getUTCMonth() === localDate.getMonth() &&
+    utcDate.getUTCDate() === localDate.getDate()
+  );
+}
+
+/**
+ * Check if a UTC date (from server) is today in local time.
+ * @param utcDateStr - ISO date string from server
+ * @returns true if the UTC date is today
+ */
+export function isUTCDateToday(utcDateStr: string | null | undefined): boolean {
+  if (!utcDateStr) return false;
+  return isSameCalendarDay(utcDateStr, new Date());
+}
